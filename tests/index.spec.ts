@@ -12,9 +12,10 @@ import type { SettingsNamespace } from '@deepseek-ai/dsh-settings'
 import { collect } from './assemble.ts'
 import { createMockServer } from './mock-server.ts'
 import { apply } from '../src/index.ts'
-import type { ApplyTestDependencies } from '../src/index.ts'
+import { createApply } from '../src/apply.ts'
+import type { ApplyDependencies } from '../src/apply.ts'
 
-type CatalogLoader = NonNullable<ApplyTestDependencies['loadCatalog']>
+type CatalogLoader = NonNullable<ApplyDependencies['loadCatalog']>
 
 const staticCatalogLoader: CatalogLoader = async ({ staticModels }) => ({
   initial: { models: staticModels, source: 'static' },
@@ -94,17 +95,22 @@ async function boot(config: {
     await ctx.plugin(TestCredentials, config.credentialValue)
   }
   if (config.settings === true) await ctx.plugin(TestSettings)
-  apply(ctx, { apiKeyEnv: 'COMMANDCODE_API_KEY', baseURL: config.baseURL }, {
+  createApply({
     fetchImpl: config.catalogFetch,
     loadCatalog: config.catalogLoader ?? staticCatalogLoader,
-  })
+  })(ctx, { apiKeyEnv: 'COMMANDCODE_API_KEY', baseURL: config.baseURL })
   return ctx
 }
+
+test('public apply keeps the two-argument production signature without test seams', () => {
+  assert.equal(typeof apply, 'function')
+  assert.equal(apply.length, 2)
+})
 
 test('apply registers the configurable provider and adapter reversibly', async () => {
   const ctx = new Context()
   await ctx.plugin(LlmRuntime)
-  apply(ctx, { apiKeyEnv: 'COMMANDCODE_API_KEY' }, { loadCatalog: staticCatalogLoader })
+  createApply({ loadCatalog: staticCatalogLoader })(ctx, { apiKeyEnv: 'COMMANDCODE_API_KEY' })
   const llm = ctx.llm
 
   assert.deepEqual(llm.listProviders(), [{ id: 'commandcode', name: 'Command Code' }])
