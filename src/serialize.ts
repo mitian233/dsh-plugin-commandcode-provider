@@ -27,7 +27,7 @@ function textFromBlocks(blocks: readonly ContentBlock[]): string {
 
 function assertNoImages(blocks: readonly ContentBlock[]): void {
   if (blocks.some((block) => block.type === 'image')) {
-    throw new LlmError('Command Code v1 does not support image input.', 'UNSUPPORTED_CONTENT')
+    throw new LlmError('Command Code v1 does not support image input.', 'UNSUPPORTED')
   }
   for (const block of blocks) {
     if (block.type === 'tool-result') assertNoImages(block.content)

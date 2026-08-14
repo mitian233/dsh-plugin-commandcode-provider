@@ -2,8 +2,10 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 
 import { LlmError } from '@deepseek-ai/dsh-llm'
+import type { GenerateOptions } from '@deepseek-ai/dsh-llm'
 
 import { commandCodeHeaders, serializeRequest } from '../src/serialize.ts'
+import type { WireEvent } from '../src/types.ts'
 
 const defaults = {
   workingDir: 'C:\\Work Space\\My_Project!',
@@ -14,7 +16,7 @@ const defaults = {
   attribution: { 'user-agent': 'dsh-test' },
 }
 
-const request = {
+const request: GenerateOptions = {
   provider: 'commandcode',
   model: 'gpt-5.6-luna',
   system: 'Be concise.',
@@ -22,8 +24,9 @@ const request = {
   maxTokens: 100_000,
   reasoningEffort: 'high' as never,
   messages: [
-    { role: 'user', content: [{ type: 'text', text: 'hello' }], source: { kind: 'user' } },
+    { id: 'message_1' as never, role: 'user', content: [{ type: 'text', text: 'hello' }], source: { kind: 'user' } },
     {
+      id: 'message_2' as never,
       role: 'assistant',
       content: [
         { type: 'text', text: 'calling tool' },
@@ -32,6 +35,7 @@ const request = {
       source: { kind: 'model', provider: 'commandcode', model: 'gpt-5.6-luna' },
     },
     {
+      id: 'message_3' as never,
       role: 'user',
       content: [{ type: 'tool-result', toolCallId: 'call_1' as never, content: [{ type: 'text', text: 'sunny' }], isError: false }],
       source: { kind: 'tool', callId: 'call_1' as never },
@@ -78,6 +82,11 @@ test('uses temperature 0.3 and omits unsupported or absent reasoning', () => {
 
 test('rejects stop, image blocks, and unsupported model efforts before dispatch', () => {
   assert.throws(() => serializeRequest({ ...request, stop: ['END'] }, defaults), (error: unknown) => error instanceof LlmError && error.code === 'UNSUPPORTED')
-  assert.throws(() => serializeRequest({ ...request, messages: [{ ...request.messages[0], content: [{ type: 'image', attachment: {} as never }] }] }, defaults), (error: unknown) => error instanceof LlmError && error.code === 'UNSUPPORTED_CONTENT')
+  assert.throws(() => serializeRequest({ ...request, messages: [{ ...request.messages[0], content: [{ type: 'image', attachment: {} as never }] }] }, defaults), (error: unknown) => error instanceof LlmError && error.code === 'UNSUPPORTED')
   assert.throws(() => serializeRequest({ ...request, model: 'future-model', reasoningEffort: 'high' as never }, defaults), (error: unknown) => error instanceof LlmError && error.code === 'UNSUPPORTED_REASONING_EFFORT')
+})
+
+test('wire tool calls retain required identity while translator validation owns argument presence', () => {
+  const event: WireEvent = { type: 'tool-call', toolCallId: 'call_1', toolName: 'weather' }
+  assert.deepEqual(event, { type: 'tool-call', toolCallId: 'call_1', toolName: 'weather' })
 })

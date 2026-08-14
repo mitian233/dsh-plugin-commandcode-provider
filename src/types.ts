@@ -80,9 +80,15 @@ export type WireEvent =
   | { type: 'reasoning-delta'; text: string }
   | { type: 'reasoning-end' }
   | { type: 'tool-result' }
-  | ({ type: 'tool-call'; toolCallId: string; toolName: string; input: unknown; args?: unknown; arguments?: unknown })
-  | ({ type: 'tool-call'; toolCallId: string; toolName: string; input?: never; args: unknown; arguments?: unknown })
-  | ({ type: 'tool-call'; toolCallId: string; toolName: string; input?: never; args?: never; arguments: unknown })
+  | {
+    type: 'tool-call'
+    toolCallId: string
+    toolName: string
+    /** Translator validation requires at least one and selects input > args > arguments. */
+    input?: unknown
+    args?: unknown
+    arguments?: unknown
+  }
   | { type: 'finish'; finishReason: string; totalUsage?: WireUsage }
   | ({ type: 'error'; error: unknown; message?: unknown })
   | ({ type: 'error'; error?: unknown; message: unknown })
