@@ -10,12 +10,14 @@ import {
   unknownFinishReasonCode,
 } from '../src/errors.ts'
 
-test('redacts bearer credentials and sensitive fields before errors escape', () => {
+test('redacts bearer credentials and standalone Command Code tokens before errors escape', () => {
   const secret = 'sk-abcdefghijklmnopqrstuvwxyz123456'
+  const userToken = 'user_abcdefghijk'
+  const commandCodeToken = 'cc_abcdefghijk'
   const text = redactCommandCodeErrorText(
-    `Authorization: Bearer ${secret}; api_key=${secret}; token=${secret}`,
+    `Authorization: Bearer ${secret}; api_key=${secret}; token=${secret}; ${userToken}; ${commandCodeToken}`,
   )
-  assert.equal(text.includes(secret), false)
+  for (const value of [secret, userToken, commandCodeToken]) assert.equal(text.includes(value), false)
   assert.match(text, /Bearer \[redacted\]/)
 })
 

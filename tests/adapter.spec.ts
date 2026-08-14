@@ -1,6 +1,8 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 
+import { LlmError } from '@deepseek-ai/dsh-llm'
+
 import { CommandCodeAdapter } from '../src/adapter.ts'
 import { collect } from './assemble.ts'
 import { createMockServer } from './mock-server.ts'
@@ -64,6 +66,42 @@ test('maps provider status failures', async (t) => {
     t.after(() => server.close())
     await assert.rejects(collect(adapter(server.url).stream(options())), { code })
   }
+})
+
+test('classifies and redacts plain-text HTTP failure bodies', async (t) => {
+  const secret = 'cc_abcdefghijk'
+  for (const [status, body, code] of [
+    [400, 'context_length_exceeded', 'CONTEXT_WINDOW_EXCEEDED'],
+    [429, `rate limit: ${secret}`, 'RATE_LIMIT'],
+  ] as const) {
+    const server = await createMockServer({ status, chunks: [encoder.encode(body)] })
+    t.after(() => server.close())
+    let error: unknown
+    try {
+      await collect(adapter(server.url).stream(options()))
+    } catch (caught: unknown) {
+      error = caught
+    }
+    assert.ok(error instanceof LlmError)
+    assert.equal(error.code, code)
+    assert.equal(error.message.includes(secret), false)
+  }
+})
+
+test('cancels upstream when consumer returns before finish', async (t) => {
+  const server = await createMockServer({
+    hangAfterLast: true,
+    chunks: [encoder.encode('{"type":"text-delta","text":"partial"}\n')],
+  })
+  t.after(() => server.close())
+
+  const iterator = adapter(server.url).stream(options())[Symbol.asyncIterator]()
+  assert.deepEqual(await iterator.next(), {
+    done: false,
+    value: { type: 'block-start', index: 0, blockType: 'text' },
+  })
+  await iterator.return()
+  await server.cancelled
 })
 
 test('maps caller abort and idle watchdog, and cancels an open body after finish', async (t) => {

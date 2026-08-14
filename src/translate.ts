@@ -246,7 +246,7 @@ export async function* translate(events: AsyncIterable<unknown>): AsyncGenerator
         if (usage) yield { type: 'usage', usage }
         yield {
           type: 'finish',
-          reason: mappedReason.kind === 'stop' && blocks.length === 0
+          reason: mappedReason.kind !== 'error' && blocks.length === 0
             ? {
               kind: 'error',
               failure: {

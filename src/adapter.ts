@@ -144,13 +144,14 @@ export class CommandCodeAdapter extends LlmAdapter {
       if (!response.ok) {
         let providerError: unknown
         try {
-          providerError = await response.json()
-        } catch {
+          const responseText = await response.text()
           try {
-            providerError = await response.text()
+            providerError = JSON.parse(responseText)
           } catch {
-            providerError = undefined
+            providerError = responseText
           }
+        } catch {
+          providerError = undefined
         }
         throw commandCodeError(response.status, providerError)
       }

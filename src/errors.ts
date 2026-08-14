@@ -4,7 +4,7 @@ const AUTHORIZATION = /\bauthorization\s*([:=])\s*(?:Bearer\s+)?[^\s,;)}\]]+/gi
 const BEARER = /\bBearer\s+[A-Za-z0-9._~+/=-]+/gi
 const NAMED_SECRET = /\b(api[-_ ]?key|apikey|access[-_ ]?token|refresh[-_ ]?token|token|secret|password)\s*([:=])\s*[^\s,;)}\]]+/gi
 const QUERY_SECRET = /([?&](?:api[-_ ]?key|apikey|access_token|refresh_token|token|secret|password)=)[^&#\s]+/gi
-const STANDALONE_SECRET = /\b(?:sk|rk|ghp|github_pat|xox[baprs])[-_A-Za-z0-9]{16,}\b|\beyJ[A-Za-z0-9_-]{20,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\b/g
+const STANDALONE_SECRET = /\b(?:sk|rk|ghp|github_pat|xox[baprs])[-_A-Za-z0-9]{16,}\b|\b(?:user|cc)_[A-Za-z0-9_-]{8,}\b|\beyJ[A-Za-z0-9_-]{20,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\b/g
 
 /** Remove credentials from every provider-controlled diagnostic string. */
 export function redactCommandCodeErrorText(value: string): string {

@@ -123,6 +123,21 @@ test('uses an EMPTY_RESPONSE error finish for successful completion without bloc
   ])
 })
 
+test('uses an EMPTY_RESPONSE error finish for every successful empty completion', async (t) => {
+  for (const finishReason of ['tool-calls', 'length', 'max_tokens']) {
+    await t.test(finishReason, async () => {
+      const chunks = await collect(translate(events({ type: 'finish', finishReason })))
+      assert.deepEqual(chunks, [{
+        type: 'finish',
+        reason: {
+          kind: 'error',
+          failure: { message: 'model returned a completed response with no content', code: EMPTY_RESPONSE_CODE },
+        },
+      }])
+    })
+  }
+})
+
 test('maps unknown finish reasons deterministically and redacts their messages', () => {
   assert.deepEqual(mapFinishReason('content filter!'), {
     kind: 'error',
@@ -184,10 +199,10 @@ test('rejects all invalid event schema before allocating a block', async (t) => 
 })
 
 test('classifies and redacts in-stream provider errors rather than converting them to STREAM_CLOSED', async (t) => {
-  const secret = 'sk-abcdefghijklmnopqrstuvwxyz123456'
+  const secret = 'user_abcdefghijk'
   const error = await assertLlmError(translate(events({
     type: 'error',
-    error: { status: 429, message: `rate limit: Bearer ${secret}` },
+    error: { status: 429, message: `rate limit: ${secret}` },
   })), 'RATE_LIMIT')
   assert.equal(error.message.includes(secret), false)
 
