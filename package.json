@@ -1,0 +1,52 @@
+{
+  "name": "dsh-plugin-commandcode-provider",
+  "version": "0.1.0",
+  "description": "Command Code provider (LLM adapter) plugin for DeepSeek Harness",
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist",
+    "README.md"
+  ],
+  "scripts": {
+    "build": "tsc",
+    "typecheck": "tsc --noEmit",
+    "test": "node --import tsx --test tests/**/*.spec.ts"
+  },
+  "license": "MIT",
+  "keywords": [
+    "deepseek-harness",
+    "dsh-plugin",
+    "commandcode",
+    "llm-provider"
+  ],
+  "peerDependencies": {
+    "@deepseek-ai/cordis": "4.0.1",
+    "@deepseek-ai/dsh-llm": "0.1.0-rc.5",
+    "@deepseek-ai/dsh-credentials": "0.1.0-rc.5",
+    "@deepseek-ai/dsh-timeout": "0.1.0-rc.5",
+    "@deepseek-ai/dsh-launch-environment": "0.1.0-rc.5",
+    "@deepseek-ai/dsh-settings": "0.1.0-rc.5"
+  },
+  "dependencies": {
+    "@deepseek-ai/schemastery": "3.18.1"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "tsx": "^4.19.0",
+    "typescript": "^5.9.0",
+    "@deepseek-ai/cordis": "4.0.1",
+    "@deepseek-ai/dsh-llm": "workspace:0.1.0-rc.5",
+    "@deepseek-ai/dsh-credentials": "workspace:0.1.0-rc.5",
+    "@deepseek-ai/dsh-timeout": "workspace:0.1.0-rc.5",
+    "@deepseek-ai/dsh-launch-environment": "workspace:0.1.0-rc.5",
+    "@deepseek-ai/dsh-settings": "workspace:0.1.0-rc.5"
+  }
+}
