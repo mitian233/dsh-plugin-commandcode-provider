@@ -1,10 +1,15 @@
 import assert from 'node:assert/strict'
+import { mkdtemp, readFile, readdir, rm } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import test from 'node:test'
 
 import {
+  cacheIsFresh,
   commandCodeModelsFromCache,
   loadCommandCodeCatalog,
   MODEL_CATALOG_CACHE_VERSION,
+  writeCommandCodeCatalogCache,
 } from '../src/catalog.ts'
 
 const cachedModels = [{ id: 'cached', name: 'Cached', contextWindow: 100_000, maxTokens: 64_000 }]
@@ -26,6 +31,27 @@ test('uses a fresh disk cache without fetching', async () => {
   assert.deepEqual(loaded.initial, { models: cachedModels, source: 'cache', fetchedAt: 950 })
   assert.equal(loaded.refresh, undefined)
   assert.equal(fetches, 0)
+})
+
+test('does not consider a future-dated cache fresh', () => {
+  assert.equal(cacheIsFresh(1_001, 100, 1_000), false)
+})
+
+test('writes concurrent cache refreshes atomically with unique temporary files', async (t) => {
+  const directory = await mkdtemp(join(tmpdir(), 'commandcode-catalog-'))
+  const cachePath = join(directory, 'models.json')
+  t.after(() => rm(directory, { recursive: true, force: true }))
+  const writes = Array.from({ length: 16 }, (_, index) => writeCommandCodeCatalogCache(
+    cachePath,
+    [{ id: `live-${index}`, contextWindow: 100_000 }],
+    1_000 + index,
+  ))
+
+  await Promise.all(writes)
+
+  const cache = commandCodeModelsFromCache(JSON.parse(await readFile(cachePath, 'utf8')) as unknown)
+  assert.match(cache.models[0]?.id ?? '', /^live-\d+$/)
+  assert.deepEqual(await readdir(directory), ['models.json'])
 })
 
 test('keeps a stale cache available while refreshing it in the background', async () => {

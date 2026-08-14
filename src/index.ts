@@ -19,6 +19,7 @@ import {
   DEFAULT_MODELS_CACHE_TTL_MS,
   loadCommandCodeCatalog,
 } from './catalog.ts'
+import type { LoadedCommandCodeCatalog } from './catalog.ts'
 
 export { CommandCodeAdapter, DEFAULT_STREAM_IDLE_TIMEOUT_MS, PROVIDER } from './adapter.ts'
 export type { CommandCodeAdapterOptions, CommandCodeCatalogModel, CommandCodeConnectionOptions } from './adapter.ts'
@@ -106,8 +107,14 @@ export function resolveAdapterOptions(config: Config): CommandCodeConnectionOpti
   }
 }
 
+/** Test-only seams for deterministic catalog startup tests. */
+export interface ApplyTestDependencies {
+  fetchImpl?: typeof fetch
+  loadCatalog?: (options: Parameters<typeof loadCommandCodeCatalog>[0]) => Promise<LoadedCommandCodeCatalog>
+}
+
 /** Register the configurable provider, request-time credentials seam, and reversible adapter route. */
-export function apply(ctx: Context, config: Config): void {
+export function apply(ctx: Context, config: Config, testDependencies: ApplyTestDependencies = {}): void {
   let current: () => Config = () => config
   let lastRaw: Config | undefined
   let lastGood: CommandCodeConnectionOptions | undefined
@@ -154,23 +161,31 @@ export function apply(ctx: Context, config: Config): void {
   const registration = ctx.llm.registerAdapter([PROVIDER], adapter)
   let registeredPolicy = options().retryPolicy
   let catalogRefreshActive = true
-  ctx.effect(() => () => { catalogRefreshActive = false }, 'llm-commandcode.catalog-refresh')
+  const catalogRefreshAbort = new AbortController()
+  ctx.effect(() => () => {
+    catalogRefreshActive = false
+    catalogRefreshAbort.abort()
+  }, 'llm-commandcode.catalog-refresh')
+  const catalogRefreshUsable = (): boolean => catalogRefreshActive && !catalogRefreshAbort.signal.aborted
   const publishCatalog = (models: readonly CommandCodeCatalogModel[]): void => {
-    if (!catalogRefreshActive) return
+    if (!catalogRefreshUsable()) return
     catalogModels = models
     lastRaw = undefined
     registration.replace([PROVIDER])
   }
   const refreshCatalog = async (): Promise<void> => {
-    const catalog = await loadCommandCodeCatalog({
+    const catalog = await (testDependencies.loadCatalog ?? loadCommandCodeCatalog)({
       cachePath: dshHomePath('commandcode', 'models.json'),
       staticModels: staticCommandCodeCatalogModels(),
       ttlMs: current().modelsCacheTtlMs ?? DEFAULT_MODELS_CACHE_TTL_MS,
+      fetchImpl: testDependencies.fetchImpl,
+      signal: catalogRefreshAbort.signal,
     })
+    if (!catalogRefreshUsable()) return
     if (catalog.initial.source === 'cache') publishCatalog(catalog.initial.models)
-    if (catalog.initial.warning !== undefined) ctx.logger.debug(`llm-commandcode: ${catalog.initial.warning}`)
+    if (catalog.initial.warning !== undefined && catalogRefreshUsable()) ctx.logger.debug(`llm-commandcode: ${catalog.initial.warning}`)
     const refreshed = await catalog.refresh
-    if (refreshed === undefined) return
+    if (refreshed === undefined || !catalogRefreshUsable()) return
     if (refreshed.warning !== undefined) ctx.logger.warn(`llm-commandcode: ${refreshed.warning}`)
     // On failure the initial cache/static fallback remains published. A live
     // result always replaces the route so the UI reloads its model directory.

@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto'
 import { mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises'
 import { dirname } from 'node:path'
 
@@ -91,7 +92,7 @@ export function commandCodeModelsFromCache(value: unknown): CachedCommandCodeCat
 }
 
 export function cacheIsFresh(fetchedAt: number, ttlMs = DEFAULT_MODELS_CACHE_TTL_MS, now = Date.now()): boolean {
-  return Number.isFinite(fetchedAt) && Number.isFinite(ttlMs) && ttlMs >= 0 && now - fetchedAt <= ttlMs
+  return Number.isFinite(fetchedAt) && Number.isFinite(ttlMs) && ttlMs >= 0 && fetchedAt <= now && now - fetchedAt <= ttlMs
 }
 
 export async function fetchCommandCodeCatalog(options: FetchCommandCodeCatalogOptions = {}): Promise<readonly CommandCodeCatalogModel[]> {
@@ -112,10 +113,12 @@ export async function writeCommandCodeCatalogCache(
   models: readonly CommandCodeCatalogModel[],
   fetchedAt = Date.now(),
 ): Promise<void> {
-  const temporaryPath = `${cachePath}.${process.pid}.${Date.now()}.tmp`
+  const temporaryPath = `${cachePath}.${process.pid}.${randomUUID()}.tmp`
   await mkdir(dirname(cachePath), { recursive: true, mode: 0o700 })
   try {
-    await writeFile(temporaryPath, `${JSON.stringify({ version: MODEL_CATALOG_CACHE_VERSION, models, fetchedAt })}\n`, { encoding: 'utf8', mode: 0o600 })
+    await writeFile(temporaryPath, `${JSON.stringify({ version: MODEL_CATALOG_CACHE_VERSION, models, fetchedAt })}\n`, {
+      encoding: 'utf8', mode: 0o600, flag: 'wx',
+    })
     await rename(temporaryPath, cachePath)
   } finally {
     await rm(temporaryPath, { force: true }).catch(() => undefined)
@@ -153,6 +156,7 @@ export async function loadCommandCodeCatalog(options: LoadCommandCodeCatalogOpti
   const refresh = (async (): Promise<CommandCodeCatalogResult> => {
     try {
       const models = await fetchCommandCodeCatalog(options)
+      if (options.signal?.aborted) return fallback
       try {
         await writeCache(options.cachePath, models, now)
         return { models, source: 'live', fetchedAt: now }

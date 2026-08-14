@@ -12,6 +12,23 @@ import type { SettingsNamespace } from '@deepseek-ai/dsh-settings'
 import { collect } from './assemble.ts'
 import { createMockServer } from './mock-server.ts'
 import { apply } from '../src/index.ts'
+import type { ApplyTestDependencies } from '../src/index.ts'
+
+type CatalogLoader = NonNullable<ApplyTestDependencies['loadCatalog']>
+
+const staticCatalogLoader: CatalogLoader = async ({ staticModels }) => ({
+  initial: { models: staticModels, source: 'static' },
+})
+
+function nextTurn(): Promise<void> {
+  return new Promise(resolve => setImmediate(resolve))
+}
+
+function deferred<T>(): { promise: Promise<T>; resolve: (value: T) => void } {
+  let resolve: (value: T) => void = () => undefined
+  const promise = new Promise<T>(resolvePromise => { resolve = resolvePromise })
+  return { promise, resolve }
+}
 
 class TestCredentials extends CredentialProvider {
   constructor(ctx: Context, private readonly value: string | undefined) {
@@ -60,7 +77,14 @@ async function assertNoRequest(server: Awaited<ReturnType<typeof createMockServe
   assert.equal(requested, false)
 }
 
-async function boot(config: { baseURL: string; credentialValue?: string; ambientValue?: string; settings?: boolean }): Promise<Context> {
+async function boot(config: {
+  baseURL: string
+  credentialValue?: string
+  ambientValue?: string
+  settings?: boolean
+  catalogFetch?: typeof fetch
+  catalogLoader?: CatalogLoader
+}): Promise<Context> {
   const ctx = new Context()
   await ctx.plugin(LlmRuntime)
   ctx.provide(DSH_LAUNCH_ENVIRONMENT_KEY, createLaunchEnvironmentSnapshot([
@@ -70,14 +94,17 @@ async function boot(config: { baseURL: string; credentialValue?: string; ambient
     await ctx.plugin(TestCredentials, config.credentialValue)
   }
   if (config.settings === true) await ctx.plugin(TestSettings)
-  apply(ctx, { apiKeyEnv: 'COMMANDCODE_API_KEY', baseURL: config.baseURL })
+  apply(ctx, { apiKeyEnv: 'COMMANDCODE_API_KEY', baseURL: config.baseURL }, {
+    fetchImpl: config.catalogFetch,
+    loadCatalog: config.catalogLoader ?? staticCatalogLoader,
+  })
   return ctx
 }
 
 test('apply registers the configurable provider and adapter reversibly', async () => {
   const ctx = new Context()
   await ctx.plugin(LlmRuntime)
-  apply(ctx, { apiKeyEnv: 'COMMANDCODE_API_KEY' })
+  apply(ctx, { apiKeyEnv: 'COMMANDCODE_API_KEY' }, { loadCatalog: staticCatalogLoader })
   const llm = ctx.llm
 
   assert.deepEqual(llm.listProviders(), [{ id: 'commandcode', name: 'Command Code' }])
@@ -87,6 +114,81 @@ test('apply registers the configurable provider and adapter reversibly', async (
   await ctx.fiber.dispose()
   assert.deepEqual(llm.listProviders(), [])
   assert.deepEqual(llm.listConfigurableProviders(), [])
+})
+
+test('catalog startup uses injected fresh, stale, and missing cache outcomes without public fetches', async (t) => {
+  const fresh = await boot({
+    baseURL: 'http://127.0.0.1:1',
+    catalogLoader: async ({ signal }) => ({
+      initial: { models: [{ id: 'fresh', contextWindow: 12_345 }], source: 'cache', fetchedAt: 1_000 },
+    }),
+  })
+  t.after(() => fresh.fiber.dispose())
+  await nextTurn()
+  assert.deepEqual((await fresh.llm.listModels('commandcode')).map(model => model.id), ['fresh'])
+
+  const refresh = deferred<{ models: readonly { id: string; contextWindow: number }[]; source: 'live'; fetchedAt: number }>()
+  const stale = await boot({
+    baseURL: 'http://127.0.0.1:1',
+    catalogLoader: async () => ({
+      initial: { models: [{ id: 'stale', contextWindow: 12_345 }], source: 'cache', fetchedAt: 1 },
+      refresh: refresh.promise,
+    }),
+  })
+  t.after(() => stale.fiber.dispose())
+  await nextTurn()
+  assert.deepEqual((await stale.llm.listModels('commandcode')).map(model => model.id), ['stale'])
+  let liveUpdates = 0
+  stale.on('llm/adapters-updated', () => { liveUpdates += 1 })
+  refresh.resolve({ models: [{ id: 'live', contextWindow: 54_321 }], source: 'live', fetchedAt: 2_000 })
+  await nextTurn()
+  assert.equal(liveUpdates, 1)
+  assert.deepEqual((await stale.llm.listModels('commandcode')).map(model => model.id), ['live'])
+
+  const missing = await boot({
+    baseURL: 'http://127.0.0.1:1',
+    catalogLoader: async ({ staticModels }) => ({
+      initial: { models: staticModels, source: 'static', warning: 'cache missing' },
+      refresh: Promise.resolve({ models: staticModels, source: 'static', warning: 'offline' }),
+    }),
+  })
+  t.after(() => missing.fiber.dispose())
+  await nextTurn()
+  assert.ok((await missing.llm.listModels('commandcode')).some(model => model.id === 'gpt-5.6-luna'))
+})
+
+test('disposing aborts a controlled catalog fetch without replacing the adapter route', async () => {
+  const started = deferred<void>()
+  let receivedSignal: AbortSignal | undefined
+  const catalogFetch: typeof fetch = async (_input, init) => await new Promise<Response>((_resolve, reject) => {
+    const signal = init?.signal
+    assert.ok(signal instanceof AbortSignal)
+    receivedSignal = signal
+    started.resolve()
+    signal.addEventListener('abort', () => reject(signal.reason), { once: true })
+  })
+  const ctx = await boot({
+    baseURL: 'http://127.0.0.1:1',
+    catalogFetch,
+    catalogLoader: async ({ fetchImpl, signal }) => {
+      assert.equal(fetchImpl, catalogFetch)
+      try {
+        await fetchImpl?.('http://catalog.test/models', { signal })
+      } catch {
+        // The loader returns after cancellation so apply can prove it publishes nothing.
+      }
+      return { initial: { models: [{ id: 'late', contextWindow: 12_345 }], source: 'cache', fetchedAt: 1 } }
+    },
+  })
+  await started.promise
+  let topologyUpdates = 0
+  ctx.on('llm/adapters-updated', () => { topologyUpdates += 1 })
+
+  await ctx.fiber.dispose()
+  await nextTurn()
+
+  assert.equal(receivedSignal?.aborted, true)
+  assert.equal(topologyUpdates, 0)
 })
 
 test('credentials service misses do not fall back to launch environment', async (t) => {

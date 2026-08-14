@@ -160,7 +160,7 @@ test('non-empty settings models take priority over the discovered catalog', asyn
   assert.equal((await instance.resolveModel('commandcode', 'settings')).context.contextWindow, 12_345)
 })
 
-test('an empty settings models array falls back to the static capability snapshot', async () => {
+test('an empty settings models array falls back to the discovered catalog', async () => {
   const empty = new CommandCodeAdapter({
     options: () => ({
       baseURL: 'http://localhost',
@@ -170,14 +170,15 @@ test('an empty settings models array falls back to the static capability snapsho
       defaultContextWindow: 1_000_000,
       streamIdleTimeoutMs: 100,
       // A settings section materializes an absent `models` as `[]`; it must
-      // not clear the catalog that a custom list would otherwise override.
+      // not clear the cache/live catalog that a custom list would override.
       models: [],
+      catalogModels: [{ id: 'live', name: 'Live model', contextWindow: 12_345 }],
     }),
     resolveApiKey: async () => key,
   })
-  const models = await empty.listModels('commandcode')
-  assert.ok(models.length > 0)
-  assert.ok(models.some(model => model.id === 'gpt-5.6-luna'))
-  const resolved = await empty.resolveModel('commandcode', 'gpt-5.6-luna')
-  assert.equal(resolved.defaultMaxTokens, 64_000)
+  assert.deepEqual(await empty.listModels('commandcode'), [{
+    provider: 'commandcode', id: 'live', name: 'Live model', inputModalities: ['text'],
+  }])
+  const resolved = await empty.resolveModel('commandcode', 'live')
+  assert.equal(resolved.context.contextWindow, 12_345)
 })
