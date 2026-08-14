@@ -63,18 +63,24 @@ The function plugin exports named `name`, `inject`, `Config`, and `apply` bindin
 
 All registrations are acquired through `ctx.effect()`/`ctx.on()` or APIs returning disposers, so unload/HMR reverses every effect. No custom API-key files are read. The default credential reference is `COMMANDCODE_API_KEY`.
 
+`CommandCodeAdapter` must implement both `listModels()` and `resolveModel()`. They preserve the selected provider/model identity, report `inputModalities: ['text']`, obtain opaque reasoning-effort IDs from the static capability table, and expose `defaultMaxTokens` capped at 64,000. Unknown models use the configured context window and text-only fallback but do not advertise unsupported reasoning efforts. This allows DSH to validate `reasoningEffort` before dispatch rather than rejecting every such request through the base adapter default.
+
+Credential resolution is deterministic: first validate the configured credential reference; if the DSH credentials service is present, resolve only through that service and do not fall back to the process environment after a miss. Only when the service is absent may the adapter obtain the named value from `launchEnvironmentOf(ctx)`. Empty, whitespace-only, or header-invalid values fail before `fetch` as `MISSING_CREDENTIAL` or `INVALID_CREDENTIAL`; messages may contain the credential reference but never its value.
+
 ## Request flow
 
 1. DSH selects the `commandcode` adapter and calls `stream(options)`.
 2. The adapter resolves the configured credential reference immediately before dispatch, combines the caller signal with its timeout/watchdog signal, and serializes the request.
-3. `serializeRequest()` produces the wire request:
-   - output cap is `min(request maxTokens/default, 64_000)`;
-   - `reasoning_effort` is omitted when unsupported or disabled;
-   - text, system prompts, assistant tool calls, tool results, and JSON Schema tools map to Command Code fields;
+3. `serializeRequest()` produces the v1 wire envelope:
+   - `config` carries the selected model and `params` carries `max_tokens` (capped at `min(request maxTokens/default, 64_000)`), configured temperature, and an optional supported `reasoning_effort`;
+   - `memory`, `taste`, and `skills` are explicitly `null`; a generated UUID supplies `threadId`;
+   - text, system prompts, assistant tool calls, tool results, and JSON Schema tools map to the Command Code message/tool fields;
+   - `stop` is not supported by the verified v1 Command Code envelope, so `options.stop !== undefined` throws `LlmError(..., 'UNSUPPORTED')` before any network request;
    - image input fails before network dispatch.
-4. The adapter performs the POST with Command Code attribution headers and starts the idle watchdog while reads are pending.
-5. The response body is passed to `parseCommandCodeLines()`, then `translate()`.
-6. A `finally` block cancels an unfinished upstream reader/body even after the consumer stops early.
+4. The adapter performs the POST with `Authorization`, the fixed `x-command-code-version`, `x-cli-environment`, `x-project-slug`, and `attributionHeaders()` headers, then starts the idle watchdog while reads are pending.
+5. `parseCommandCodeLines()` accepts JSON lines and `data: <JSON>` lines; it ignores blank lines, comments, `event:` framing, and `[DONE]`. A non-framing payload that is expected to be JSON but cannot parse throws `MALFORMED_RESPONSE`.
+6. The parsed events are passed to `translate()`.
+7. A `finally` block cancels an unfinished upstream reader/body even after the consumer stops early.
 
 ## Stream translation contract
 
@@ -82,11 +88,12 @@ The translator owns all wire-event state. It allocates monotonically increasing 
 
 - Empty text or reasoning deltas do not open blocks.
 - Nonempty text/reasoning deltas open the corresponding block lazily and append to it.
-- A tool-call event opens a tool-call block and emits one complete `tool-call-delta`; its `argumentsDelta` is `JSON.stringify(input)`.
+- A tool-call event opens a tool-call block and emits one complete `tool-call-delta`. Wire `input` is `unknown`: a record is serialized once with `JSON.stringify`; a string must parse to a JSON object and is reserialized once into canonical object JSON; every other shape is a stable malformed-response error. `argumentsDelta` is therefore always raw JSON for the argument object, never double-encoded JSON text.
 - On Command Code finish, the translator defers terminal emission until it has closed every opened block.
 - Terminal order is always: all `block-end` chunks, then optional `usage`, then exactly one `finish`.
 - A successful finish with no content blocks becomes an `EMPTY_RESPONSE` error finish.
 - A closed transport without a finish event throws `LlmError('STREAM_CLOSED')`.
+- A wire `{ type: 'error' }` event extracts nested message/code/type/status data, redacts it, classifies it with the same provider classifier as HTTP failures, and throws `LlmError`; it is not converted to `STREAM_CLOSED` and no later chunks may be emitted.
 
 Finish reasons map as follows:
 
@@ -101,9 +108,9 @@ Usage preserves DSH's disjoint token convention: use `noCacheTokens` when suppli
 
 ## Errors, cancellation, and observability
 
-- HTTP status is classified at the adapter boundary: 401/403 to authentication, 429 to rate-limit, context-window provider errors to `CONTEXT_WINDOW_EXCEEDED`, and 5xx to server failure.
+- HTTP status and in-stream provider errors are classified at the adapter boundary: 401/403 to authentication, 429 to rate-limit, context-window provider errors to `CONTEXT_WINDOW_EXCEEDED`, and 5xx to server failure.
 - Error text must redact `Authorization: Bearer …`, API keys, and equivalent sensitive fields before creating a DSH error.
-- Parser malformation, missing terminal events, unsupported image input, invalid usage, and unknown terminal reasons use stable DSH error codes.
+- Parser malformation, missing terminal events, unsupported image/stop input, invalid tool input or usage, and unknown terminal reasons use stable DSH error codes.
 - Caller abort produces the normal aborted terminal outcome; the idle watchdog produces DSH's stream-idle-timeout outcome.
 - Command Code attribution headers are sent with every fetch.
 
@@ -113,19 +120,21 @@ Use the Node test runner and a local mock server. The server emits newline-delim
 
 | Test file | Primary assertions |
 | --- | --- |
-| `stream.spec.ts` | fragmented line decoding, blank lines, malformed payloads, EOF handling |
-| `serialize.spec.ts` | all request fields, 64k cap, effort omission, image rejection |
-| `translate.spec.ts` | lazy blocks, complete tool JSON, terminal ordering, usage mapping, finish mapping, no-finish EOF |
-| `models.spec.ts` | static capability-table snapshots |
-| `errors.spec.ts` | redaction and context-overflow classification |
-| `adapter.spec.ts` | text/tool/usage integration, status mapping, headers, abort, watchdog, and upstream cancellation |
+| `stream.spec.ts` | fragmented line decoding, blank lines, comments/`event:`/`data:` framing, `[DONE]`, malformed payloads, EOF handling |
+| `serialize.spec.ts` | complete envelope, all request fields, 64k cap, effort omission, `stop` rejection without network dispatch, image rejection |
+| `translate.spec.ts` | lazy blocks, string and record tool input canonicalization, terminal ordering, usage mapping, finish mapping, in-stream error classification/redaction, no-finish EOF |
+| `models.spec.ts` | static capability-table snapshots plus known/unknown `resolveModel()` behavior and reasoning capabilities |
+| `errors.spec.ts` | HTTP and in-stream redaction and context-overflow classification |
+| `adapter.spec.ts` | text/tool/usage integration, status mapping, exact headers/envelope, credential resolution precedence and validation, abort, watchdog, and upstream cancellation |
 | `index.spec.ts` | provider registration and disposer behavior where the DSH test harness supports it |
 
 The acceptance gate is `pnpm run typecheck`, `pnpm run build`, and `pnpm run test` passing in the workspace-resolved environment.
 
 ## Workspace integration
 
-The plugin becomes a DSH pnpm workspace member solely to resolve matching private `@deepseek-ai/*` packages from the host's pinned sources. The host workspace change is limited to adding this plugin path; no DSH runtime package code or agent-loop behavior changes.
+The plugin becomes a DSH pnpm workspace member solely to resolve matching private `@deepseek-ai/*` packages from the host's pinned sources. The host change is explicit: add `../dsh-plugin-commandcode-provider` as a member in `/Users/mikan/WebstormProjects/deepseek-harness/pnpm-workspace.yaml`, retain the plugin's exact `@deepseek-ai/*` versions, and run `pnpm install` from the host root. Commit the resulting host lockfile only if pnpm changes it; do not modify DSH runtime packages or `agent-loop`.
+
+This external-path topology is a development integration, not a portable standalone CI topology. Before publishing or enabling independent CI, the plugin must instead be moved under the DSH checkout, vendored/submoduled at a stable in-workspace path, or consume published compatible DSH packages. The workspace acceptance gate runs from a clean paired checkout after installation, followed by the plugin's typecheck, build, and test commands.
 
 ## Non-goals and future work
 
