@@ -78,10 +78,27 @@ Credential resolution is deterministic: first validate the configured credential
    - text, system prompts, assistant tool calls, tool results, and JSON Schema tools map to the Command Code message/tool fields;
    - `stop` is not supported by the verified v1 Command Code envelope, so `options.stop !== undefined` throws `LlmError(..., 'UNSUPPORTED')` before any network request;
    - image input fails before network dispatch.
-4. The adapter performs the POST with `Authorization`, `attributionHeaders()`, and the complete fixed Command Code compatibility header set: `x-command-code-version` from the pinned Command Code CLI-version constant, `x-cli-environment: production`, `x-project-slug` from the execution context, `x-taste-learning: true`, and `x-co-flag: false`. Tests assert each header and its value before starting the idle watchdog.
-5. `parseCommandCodeLines()` accepts JSON lines and `data: <JSON>` lines; it ignores blank lines, comments, `event:` framing, `[DONE]`, and any plain or `data:` line that cannot parse as JSON. Only successfully parsed values that violate the Command Code event schema are rejected by `translate()` with a stable protocol error.
+4. The adapter performs the POST with `Content-Type: application/json`, `Authorization`, `attributionHeaders()`, and the complete fixed Command Code compatibility header set: `x-command-code-version` from the pinned Command Code CLI-version constant, `x-cli-environment: production`, `x-project-slug`, `x-taste-learning: true`, and `x-co-flag: false`. `x-project-slug` is derived from `config.workingDir`: lowercase it; remove a leading Windows drive prefix (`^[a-z]:`); replace every run of non-`[a-z0-9]` characters with `-`; trim leading/trailing `-`; use `project` if empty. Tests assert each header and its value before starting the idle watchdog.
+5. `parseCommandCodeLines()` accepts JSON lines and `data: <JSON>` lines; it ignores blank lines, comments, `event:` framing, `[DONE]`, and any plain or `data:` line that cannot parse as JSON. Successfully parsed JSON is validated against the Command Code event schema below; violations throw `LlmError(..., 'MALFORMED_RESPONSE')` from `translate()`.
 6. The parsed events are passed to `translate()`.
 7. A `finally` block cancels an unfinished upstream reader/body even after the consumer stops early.
+
+## Command Code event schema
+
+Every accepted wire event is a non-null JSON object with a recognized string `type`. Unknown event types, JSON arrays, scalars, `null`, missing required fields, and fields with the wrong type are `MALFORMED_RESPONSE`. Unknown extra fields are ignored for forward compatibility.
+
+| `type` | Required fields | Optional fields / semantics |
+| --- | --- | --- |
+| `text-delta` | `text: string` | Emits a lazy text block; an empty string emits no chunk. |
+| `reasoning-start` | — | Marks a reasoning boundary; no chunk is required. |
+| `reasoning-delta` | `text: string` | Emits a lazy reasoning block; an empty string emits no chunk. |
+| `reasoning-end` | — | Closes the logical reasoning boundary. |
+| `tool-result` | — | Accepted and ignored; it does not produce a DSH output chunk. |
+| `tool-call` | `toolCallId: string`, `toolName: string`, and one of `input`, `args`, or `arguments` | Argument source must be a record or a JSON string that parses to a record; it is normalized exactly once. |
+| `finish` | `finishReason: string` | `totalUsage`, when present, is an object with `inputTokens` and `outputTokens` finite non-negative numbers; optional `inputTokenDetails` contains finite non-negative `noCacheTokens`, `cacheReadTokens`, and `cacheWriteTokens`. |
+| `error` | at least one of `error` or `message` | Error payload may be a string or object; nested message/code/type/status values are extracted, redacted, then classified. |
+
+`MALFORMED_RESPONSE` is the stable schema-error code. It is thrown before any state mutation for an invalid event; no later chunks are emitted. `stream.spec.ts` covers each missing/wrong-type field, non-object JSON values, unknown event types, and a valid event after ignored non-JSON framing.
 
 ## Stream translation contract
 
@@ -121,8 +138,8 @@ Use the Node test runner and a local mock server. The server emits newline-delim
 
 | Test file | Primary assertions |
 | --- | --- |
-| `stream.spec.ts` | fragmented line decoding, blank lines, comments/`event:`/`data:` framing, ignored `not json` and `data: non-json` lines, `[DONE]`, schema-invalid parsed events, EOF handling |
-| `serialize.spec.ts` | complete envelope with `config` execution context and `params.model`, all request fields, 64k cap, effort omission, `stop` rejection without network dispatch, image rejection |
+| `stream.spec.ts` | fragmented line decoding, blank lines, comments/`event:`/`data:` framing, ignored `not json` and `data: non-json` lines, `[DONE]`, every schema-invalid event shape, EOF handling |
+| `serialize.spec.ts` | complete envelope with `config` execution context and `params.model`, all request fields, complete fixed headers (`Content-Type`, compatibility, attribution, and slug), 64k cap, effort omission, `stop` rejection without network dispatch, image rejection |
 | `translate.spec.ts` | lazy blocks, string and record tool input canonicalization, terminal ordering, usage mapping, finish mapping, in-stream error classification/redaction, no-finish EOF |
 | `models.spec.ts` | static capability-table snapshots plus known/unknown `resolveModel()` behavior and reasoning capabilities |
 | `errors.spec.ts` | HTTP and in-stream redaction and context-overflow classification |
