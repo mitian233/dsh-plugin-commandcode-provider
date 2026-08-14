@@ -143,3 +143,25 @@ test('lists model metadata and resolves known and unknown models as text-only', 
   assert.deepEqual(unknown.inputModalities, ['text'])
   assert.equal(unknown.reasoning, undefined)
 })
+
+test('an empty settings models array falls back to the static capability snapshot', async () => {
+  const empty = new CommandCodeAdapter({
+    options: () => ({
+      baseURL: 'http://localhost',
+      apiKeyEnv: 'COMMANDCODE_API_KEY',
+      workingDir: '/Example Project',
+      maxTokens: 64_000,
+      defaultContextWindow: 1_000_000,
+      streamIdleTimeoutMs: 100,
+      // A settings section materializes an absent `models` as `[]`; it must
+      // not clear the catalog that a custom list would otherwise override.
+      models: [],
+    }),
+    resolveApiKey: async () => key,
+  })
+  const models = await empty.listModels('commandcode')
+  assert.ok(models.length > 0)
+  assert.ok(models.some(model => model.id === 'gpt-5.6-luna'))
+  const resolved = await empty.resolveModel('commandcode', 'gpt-5.6-luna')
+  assert.equal(resolved.defaultMaxTokens, 64_000)
+})

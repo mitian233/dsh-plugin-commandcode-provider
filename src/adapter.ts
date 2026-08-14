@@ -50,7 +50,9 @@ export interface CommandCodeAdapterOptions {
 }
 
 function configuredModels(connection: CommandCodeConnectionOptions): readonly CommandCodeCatalogModel[] {
-  if (connection.models !== undefined) return connection.models
+  // A settings section materializes an absent `models` as `[]`; treat an
+  // empty list as unset so the static capability snapshot still serves.
+  if (connection.models !== undefined && connection.models.length > 0) return connection.models
   return [...new Set([...Object.keys(MODEL_INPUT_MODALITIES), ...Object.keys(MODEL_EFFORTS)])]
     .map(id => ({ id }))
 }
