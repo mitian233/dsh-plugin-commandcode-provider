@@ -144,6 +144,22 @@ test('lists model metadata and resolves known and unknown models as text-only', 
   assert.equal(unknown.reasoning, undefined)
 })
 
+test('non-empty settings models take priority over the discovered catalog', async () => {
+  const instance = new CommandCodeAdapter({
+    options: () => ({
+      baseURL: 'http://localhost', apiKeyEnv: 'COMMANDCODE_API_KEY', workingDir: '/', maxTokens: 64_000,
+      defaultContextWindow: 1_000_000, streamIdleTimeoutMs: 100,
+      models: [{ id: 'settings', name: 'Settings model', contextWindow: 12_345 }],
+      catalogModels: [{ id: 'live', name: 'Live model', contextWindow: 99_999 }],
+    }),
+    resolveApiKey: async () => key,
+  })
+  assert.deepEqual(await instance.listModels('commandcode'), [{
+    provider: 'commandcode', id: 'settings', name: 'Settings model', inputModalities: ['text'],
+  }])
+  assert.equal((await instance.resolveModel('commandcode', 'settings')).context.contextWindow, 12_345)
+})
+
 test('an empty settings models array falls back to the static capability snapshot', async () => {
   const empty = new CommandCodeAdapter({
     options: () => ({

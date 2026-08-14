@@ -3,6 +3,7 @@ import { assertUsableApiKey, LlmError, resolveRetryPolicy, RetryPolicySchema } f
 import type { RetryPolicyConfig } from '@deepseek-ai/dsh-llm'
 import { credentialRef } from '@deepseek-ai/dsh-credentials'
 import { launchEnvironmentOf } from '@deepseek-ai/dsh-launch-environment'
+import { dshHomePath } from '@deepseek-ai/dsh-home-paths'
 import { deepEqualJson, installSettingsSection, settingsNamespace } from '@deepseek-ai/dsh-settings'
 import { MAX_TIMER_DELAY_MS } from '@deepseek-ai/dsh-timeout'
 import z from '@deepseek-ai/schemastery'
@@ -11,8 +12,13 @@ import {
   CommandCodeAdapter,
   DEFAULT_STREAM_IDLE_TIMEOUT_MS,
   PROVIDER,
+  staticCommandCodeCatalogModels,
 } from './adapter.ts'
 import type { CommandCodeCatalogModel, CommandCodeConnectionOptions } from './adapter.ts'
+import {
+  DEFAULT_MODELS_CACHE_TTL_MS,
+  loadCommandCodeCatalog,
+} from './catalog.ts'
 
 export { CommandCodeAdapter, DEFAULT_STREAM_IDLE_TIMEOUT_MS, PROVIDER } from './adapter.ts'
 export type { CommandCodeAdapterOptions, CommandCodeCatalogModel, CommandCodeConnectionOptions } from './adapter.ts'
@@ -34,8 +40,10 @@ export interface Config {
   temperature?: number
   maxTokens?: number
   defaultContextWindow?: number
-  /** Optional static display overrides; this never performs model discovery. */
+  /** A non-empty list overrides the discovered and static model catalogs. */
   models?: CommandCodeCatalogModel[]
+  /** Cache freshness interval before a silent public catalog refresh. */
+  modelsCacheTtlMs?: number
   streamIdleTimeoutMs?: number
   retryPolicy?: RetryPolicyConfig
 }
@@ -54,6 +62,7 @@ export const Config: z<Config> = z.object({
   maxTokens: z.number().step(1).min(1).max(Number.MAX_SAFE_INTEGER).default(DEFAULT_MAX_TOKENS),
   defaultContextWindow: z.number().step(1).min(1).default(DEFAULT_CONTEXT_WINDOW),
   models: z.array(catalogModel),
+  modelsCacheTtlMs: z.number().step(1).min(0).max(Number.MAX_SAFE_INTEGER).default(DEFAULT_MODELS_CACHE_TTL_MS),
   streamIdleTimeoutMs: z.number().min(Number.MIN_VALUE).max(MAX_TIMER_DELAY_MS).default(DEFAULT_STREAM_IDLE_TIMEOUT_MS),
   retryPolicy: RetryPolicySchema,
 })
@@ -63,6 +72,7 @@ export function resolveAdapterOptions(config: Config): CommandCodeConnectionOpti
   const maxTokens = config.maxTokens ?? DEFAULT_MAX_TOKENS
   const defaultContextWindow = config.defaultContextWindow ?? DEFAULT_CONTEXT_WINDOW
   const streamIdleTimeoutMs = config.streamIdleTimeoutMs ?? DEFAULT_STREAM_IDLE_TIMEOUT_MS
+  const modelsCacheTtlMs = config.modelsCacheTtlMs ?? DEFAULT_MODELS_CACHE_TTL_MS
   if (!Number.isSafeInteger(maxTokens) || maxTokens <= 0) {
     throw new Error('llm-commandcode: maxTokens must be a positive safe integer')
   }
@@ -71,6 +81,9 @@ export function resolveAdapterOptions(config: Config): CommandCodeConnectionOpti
   }
   if (!Number.isFinite(streamIdleTimeoutMs) || streamIdleTimeoutMs <= 0 || streamIdleTimeoutMs > MAX_TIMER_DELAY_MS) {
     throw new Error(`llm-commandcode: streamIdleTimeoutMs must be a positive finite number no greater than ${MAX_TIMER_DELAY_MS}`)
+  }
+  if (!Number.isSafeInteger(modelsCacheTtlMs) || modelsCacheTtlMs < 0) {
+    throw new Error('llm-commandcode: modelsCacheTtlMs must be a non-negative finite safe integer')
   }
   const apiKeyEnv = credentialRef(config.apiKeyEnv ?? DEFAULT_API_KEY_ENV)
   const models = config.models?.map(model => ({ ...model }))
@@ -98,11 +111,13 @@ export function apply(ctx: Context, config: Config): void {
   let current: () => Config = () => config
   let lastRaw: Config | undefined
   let lastGood: CommandCodeConnectionOptions | undefined
+  let catalogModels: readonly CommandCodeCatalogModel[] | undefined
   const options = (): CommandCodeConnectionOptions => {
     const raw = current()
     if (raw === lastRaw && lastGood !== undefined) return lastGood
     try {
-      const next = resolveAdapterOptions(raw)
+      const resolved = resolveAdapterOptions(raw)
+      const next = catalogModels === undefined ? resolved : { ...resolved, catalogModels }
       lastRaw = raw
       lastGood = next
       return next
@@ -138,6 +153,30 @@ export function apply(ctx: Context, config: Config): void {
   ])
   const registration = ctx.llm.registerAdapter([PROVIDER], adapter)
   let registeredPolicy = options().retryPolicy
+  let catalogRefreshActive = true
+  ctx.effect(() => () => { catalogRefreshActive = false }, 'llm-commandcode.catalog-refresh')
+  const publishCatalog = (models: readonly CommandCodeCatalogModel[]): void => {
+    if (!catalogRefreshActive) return
+    catalogModels = models
+    lastRaw = undefined
+    registration.replace([PROVIDER])
+  }
+  const refreshCatalog = async (): Promise<void> => {
+    const catalog = await loadCommandCodeCatalog({
+      cachePath: dshHomePath('commandcode', 'models.json'),
+      staticModels: staticCommandCodeCatalogModels(),
+      ttlMs: current().modelsCacheTtlMs ?? DEFAULT_MODELS_CACHE_TTL_MS,
+    })
+    if (catalog.initial.source === 'cache') publishCatalog(catalog.initial.models)
+    if (catalog.initial.warning !== undefined) ctx.logger.debug(`llm-commandcode: ${catalog.initial.warning}`)
+    const refreshed = await catalog.refresh
+    if (refreshed === undefined) return
+    if (refreshed.warning !== undefined) ctx.logger.warn(`llm-commandcode: ${refreshed.warning}`)
+    // On failure the initial cache/static fallback remains published. A live
+    // result always replaces the route so the UI reloads its model directory.
+    if (refreshed.source === 'live') publishCatalog(refreshed.models)
+  }
+  void refreshCatalog()
   const ensureRegistrationFacts = (): void => {
     const policy = options().retryPolicy
     if (deepEqualJson(policy, registeredPolicy)) return

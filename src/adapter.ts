@@ -16,6 +16,7 @@ import { idleWatchdog, timeoutOf } from '@deepseek-ai/dsh-timeout'
 
 import { commandCodeError } from './errors.ts'
 import { MODEL_EFFORTS, MODEL_INPUT_MODALITIES, reasoningEffortsForModel } from './models.ts'
+import type { CommandCodeCatalogModel } from './catalog.ts'
 import { commandCodeHeaders, serializeRequest } from './serialize.ts'
 import { parseCommandCodeLines } from './stream.ts'
 import { translate } from './translate.ts'
@@ -24,12 +25,7 @@ export const DEFAULT_STREAM_IDLE_TIMEOUT_MS = 300_000
 export const PROVIDER = 'commandcode'
 const STREAM_IDLE_TIMEOUT_CODE = 'COMMANDCODE_STREAM_IDLE_TIMEOUT'
 
-export interface CommandCodeCatalogModel {
-  id: string
-  name?: string
-  contextWindow?: number
-  maxTokens?: number
-}
+export type { CommandCodeCatalogModel } from './catalog.ts'
 
 /** Immutable connection facts resolved once for each adapter operation. */
 export interface CommandCodeConnectionOptions {
@@ -39,7 +35,10 @@ export interface CommandCodeConnectionOptions {
   maxTokens: number
   defaultContextWindow: number
   streamIdleTimeoutMs: number
+  /** A non-empty settings list overrides discovered and static catalogs. */
   models?: readonly CommandCodeCatalogModel[]
+  /** Cache/live catalog supplied by plugin startup; settings still win. */
+  catalogModels?: readonly CommandCodeCatalogModel[]
   retryPolicy?: ResolvedRetryPolicy
 }
 
@@ -49,12 +48,17 @@ export interface CommandCodeAdapterOptions {
   resolveApiKey: (connection: CommandCodeConnectionOptions) => Promise<string>
 }
 
+export function staticCommandCodeCatalogModels(): readonly CommandCodeCatalogModel[] {
+  return [...new Set([...Object.keys(MODEL_INPUT_MODALITIES), ...Object.keys(MODEL_EFFORTS)])]
+    .map(id => ({ id }))
+}
+
 function configuredModels(connection: CommandCodeConnectionOptions): readonly CommandCodeCatalogModel[] {
   // A settings section materializes an absent `models` as `[]`; treat an
   // empty list as unset so the static capability snapshot still serves.
   if (connection.models !== undefined && connection.models.length > 0) return connection.models
-  return [...new Set([...Object.keys(MODEL_INPUT_MODALITIES), ...Object.keys(MODEL_EFFORTS)])]
-    .map(id => ({ id }))
+  if (connection.catalogModels !== undefined && connection.catalogModels.length > 0) return connection.catalogModels
+  return staticCommandCodeCatalogModels()
 }
 
 function modelInfo(provider: string, model: CommandCodeCatalogModel): LlmModelInfo {
