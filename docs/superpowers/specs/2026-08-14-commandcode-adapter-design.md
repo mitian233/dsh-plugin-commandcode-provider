@@ -72,13 +72,14 @@ Credential resolution is deterministic: first validate the configured credential
 1. DSH selects the `commandcode` adapter and calls `stream(options)`.
 2. The adapter resolves the configured credential reference immediately before dispatch, combines the caller signal with its timeout/watchdog signal, and serializes the request.
 3. `serializeRequest()` produces the v1 wire envelope:
-   - `config` carries the selected model and `params` carries `max_tokens` (capped at `min(request maxTokens/default, 64_000)`), configured temperature, and an optional supported `reasoning_effort`;
+   - `config` carries the Command Code execution context: `workingDir`, an ISO-8601 `date`, CLI/environment metadata, and the remaining stable project-context fields required by the verified reference request;
+   - `params.model` carries the selected model. `params` also contains `messages`, `tools`, `system`, `stream: true`, `max_tokens` (capped at `min(request maxTokens/default, 64_000)`), configured temperature, and an optional supported `reasoning_effort`;
    - `memory`, `taste`, and `skills` are explicitly `null`; a generated UUID supplies `threadId`;
    - text, system prompts, assistant tool calls, tool results, and JSON Schema tools map to the Command Code message/tool fields;
    - `stop` is not supported by the verified v1 Command Code envelope, so `options.stop !== undefined` throws `LlmError(..., 'UNSUPPORTED')` before any network request;
    - image input fails before network dispatch.
 4. The adapter performs the POST with `Authorization`, the fixed `x-command-code-version`, `x-cli-environment`, `x-project-slug`, and `attributionHeaders()` headers, then starts the idle watchdog while reads are pending.
-5. `parseCommandCodeLines()` accepts JSON lines and `data: <JSON>` lines; it ignores blank lines, comments, `event:` framing, and `[DONE]`. A non-framing payload that is expected to be JSON but cannot parse throws `MALFORMED_RESPONSE`.
+5. `parseCommandCodeLines()` accepts JSON lines and `data: <JSON>` lines; it ignores blank lines, comments, `event:` framing, `[DONE]`, and non-JSON plain lines. Only an identified `data:` payload or an explicitly designated JSON event that cannot parse throws `MALFORMED_RESPONSE`.
 6. The parsed events are passed to `translate()`.
 7. A `finally` block cancels an unfinished upstream reader/body even after the consumer stops early.
 
@@ -120,8 +121,8 @@ Use the Node test runner and a local mock server. The server emits newline-delim
 
 | Test file | Primary assertions |
 | --- | --- |
-| `stream.spec.ts` | fragmented line decoding, blank lines, comments/`event:`/`data:` framing, `[DONE]`, malformed payloads, EOF handling |
-| `serialize.spec.ts` | complete envelope, all request fields, 64k cap, effort omission, `stop` rejection without network dispatch, image rejection |
+| `stream.spec.ts` | fragmented line decoding, blank lines, comments/`event:`/`data:` framing, ignored `not json` lines, `[DONE]`, malformed identified payloads, EOF handling |
+| `serialize.spec.ts` | complete envelope with `config` execution context and `params.model`, all request fields, 64k cap, effort omission, `stop` rejection without network dispatch, image rejection |
 | `translate.spec.ts` | lazy blocks, string and record tool input canonicalization, terminal ordering, usage mapping, finish mapping, in-stream error classification/redaction, no-finish EOF |
 | `models.spec.ts` | static capability-table snapshots plus known/unknown `resolveModel()` behavior and reasoning capabilities |
 | `errors.spec.ts` | HTTP and in-stream redaction and context-overflow classification |
