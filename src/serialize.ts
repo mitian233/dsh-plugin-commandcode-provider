@@ -56,7 +56,7 @@ function serializeAssistant(message: Message): WireMessage {
   return { role: 'assistant', content }
 }
 
-function serializeUser(message: Message): WireMessage[] {
+function serializeUser(message: Message, toolNames: ReadonlyMap<string, string>): WireMessage[] {
   const output: WireMessage[] = []
   const text = message.content.filter((block) => block.type === 'text')
   if (text.length > 0 || message.content.every((block) => block.type !== 'tool-result')) {
@@ -67,7 +67,7 @@ function serializeUser(message: Message): WireMessage[] {
     output.push({
       role: 'tool',
       content: [{
-        type: 'tool-result', toolCallId: block.toolCallId,
+        type: 'tool-result', toolCallId: block.toolCallId, toolName: toolNames.get(block.toolCallId) ?? 'unknown',
         output: { type: block.isError ? 'error-text' : 'text', value: textFromBlocks(block.content) },
       }],
     })
@@ -75,14 +75,32 @@ function serializeUser(message: Message): WireMessage[] {
   return output
 }
 
+/**
+ * Build one tool-call-id → tool-name lookup from assistant tool calls.
+ * DSH's ToolResultBlock carries no name, so a tool result must recover its
+ * call's name from the paired assistant tool-call block. This is a single O(N)
+ * pass over all messages followed by O(1) lookups per result.
+ */
+function collectToolNames(messages: readonly Message[]): ReadonlyMap<string, string> {
+  const names = new Map<string, string>()
+  for (const message of messages) {
+    if (message.role !== 'assistant') continue
+    for (const block of message.content) {
+      if (block.type === 'tool-call') names.set(block.id, block.name)
+    }
+  }
+  return names
+}
+
 /** Convert all DSH history roles without dropping text, tool calls, or tool results. */
 export function serializeMessages(messages: readonly Message[]): WireMessage[] {
+  const toolNames = collectToolNames(messages)
   const output: WireMessage[] = []
   for (const message of messages) {
     assertNoImages(message.content)
     if (message.role === 'assistant') output.push(serializeAssistant(message))
     else if (message.role === 'system') output.push({ role: 'system', content: textFromBlocks(message.content) })
-    else output.push(...serializeUser(message))
+    else output.push(...serializeUser(message, toolNames))
   }
   return output
 }

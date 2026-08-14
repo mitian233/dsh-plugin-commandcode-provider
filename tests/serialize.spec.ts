@@ -59,7 +59,7 @@ test('serializes the complete Command Code envelope and header inputs', () => {
       messages: [
         { role: 'user', content: [{ type: 'text', text: 'hello' }] },
         { role: 'assistant', content: [{ type: 'text', text: 'calling tool' }, { type: 'tool-call', toolCallId: 'call_1', toolName: 'weather', input: { city: 'Paris' } }] },
-        { role: 'tool', content: [{ type: 'tool-result', toolCallId: 'call_1', output: { type: 'text', value: 'sunny' } }] },
+        { role: 'tool', content: [{ type: 'tool-result', toolCallId: 'call_1', toolName: 'weather', output: { type: 'text', value: 'sunny' } }] },
       ],
       tools: [{ type: 'function', name: 'weather', description: 'Get weather', input_schema: { type: 'object', properties: { city: { type: 'string' } } } }],
       system: 'Be concise.', stream: true, max_tokens: 64_000, temperature: 0.7, reasoning_effort: 'high',
@@ -89,4 +89,74 @@ test('rejects stop, image blocks, and unsupported model efforts before dispatch'
 test('wire tool calls retain required identity while translator validation owns argument presence', () => {
   const event: WireEvent = { type: 'tool-call', toolCallId: 'call_1', toolName: 'weather' }
   assert.deepEqual(event, { type: 'tool-call', toolCallId: 'call_1', toolName: 'weather' })
+})
+
+test('tool results recover their call name from the paired assistant tool-call', () => {
+  const body = serializeRequest(request, defaults)
+  const toolResult = body.params.messages[2]
+  assert.deepEqual(toolResult, {
+    role: 'tool',
+    content: [{ type: 'tool-result', toolCallId: 'call_1', toolName: 'weather', output: { type: 'text', value: 'sunny' } }],
+  })
+})
+
+test('tool results without a paired assistant call fall back to unknown tool name', () => {
+  const orphan = {
+    ...request,
+    messages: [
+      { id: 'message_1' as never, role: 'user', content: [{ type: 'tool-result', toolCallId: 'orphan_1' as never, content: [{ type: 'text', text: 'no caller' }], isError: false }], source: { kind: 'tool', callId: 'orphan_1' as never } },
+    ],
+  }
+  const body = serializeRequest(orphan, defaults)
+  assert.deepEqual(body.params.messages, [
+    { role: 'tool', content: [{ type: 'tool-result', toolCallId: 'orphan_1', toolName: 'unknown', output: { type: 'text', value: 'no caller' } }] },
+  ])
+})
+
+test('parallel tool calls each recover their own name by id', () => {
+  const parallel = {
+    ...request,
+    messages: [
+      {
+        id: 'a' as never, role: 'assistant',
+        content: [
+          { type: 'tool-call', id: 'c1' as never, name: 'weather', arguments: '{}' },
+          { type: 'tool-call', id: 'c2' as never, name: 'time', arguments: '{}' },
+        ],
+        source: { kind: 'model', provider: 'commandcode', model: 'gpt-5.6-luna' },
+      },
+      {
+        id: 'b1' as never, role: 'user',
+        content: [{ type: 'tool-result', toolCallId: 'c2' as never, content: [{ type: 'text', text: '12:00' }], isError: false }],
+        source: { kind: 'tool', callId: 'c2' as never },
+      },
+      {
+        id: 'b2' as never, role: 'user',
+        content: [{ type: 'tool-result', toolCallId: 'c1' as never, content: [{ type: 'text', text: 'sunny' }], isError: false }],
+        source: { kind: 'tool', callId: 'c1' as never },
+      },
+    ],
+  }
+  const body = serializeRequest(parallel, defaults)
+  assert.deepEqual(body.params.messages, [
+    {
+      role: 'assistant',
+      content: [
+        { type: 'tool-call', toolCallId: 'c1', toolName: 'weather', input: {} },
+        { type: 'tool-call', toolCallId: 'c2', toolName: 'time', input: {} },
+      ],
+    },
+    {
+      role: 'tool',
+      content: [
+        { type: 'tool-result', toolCallId: 'c2', toolName: 'time', output: { type: 'text', value: '12:00' } },
+      ],
+    },
+    {
+      role: 'tool',
+      content: [
+        { type: 'tool-result', toolCallId: 'c1', toolName: 'weather', output: { type: 'text', value: 'sunny' } },
+      ],
+    },
+  ])
 })

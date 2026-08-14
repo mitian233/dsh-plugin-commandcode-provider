@@ -24,7 +24,7 @@ export interface WireToolCallContent {
 export interface WireToolResultContent {
   type: 'tool-result'
   toolCallId: string
-  toolName?: string
+  toolName: string
   output: { type: 'text' | 'error-text'; value: string }
 }
 
