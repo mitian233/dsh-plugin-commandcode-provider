@@ -82,8 +82,12 @@ function normalizeToolArguments(value: unknown): string | undefined {
  * Validate a parsed JSON value as one known wire-event discriminant.  This is
  * deliberately completed before translation state is changed or a block is
  * allocated, so malformed provider data cannot leave partial state behind.
+ *
+ * Unknown event types (provider extensions such as `start`, `start-step`,
+ * `text-start`, `text-end`, `finish-step`, and `provider-metadata`) return
+ * `undefined` as a skip signal so the caller can silently ignore them.
  */
-function validateWireEvent(value: unknown): ValidatedEvent {
+function validateWireEvent(value: unknown): ValidatedEvent | undefined {
   if (!isRecord(value) || typeof value.type !== 'string') throw malformedEvent()
 
   switch (value.type) {
@@ -121,7 +125,7 @@ function validateWireEvent(value: unknown): ValidatedEvent {
       return value as ValidatedEvent
     }
     default:
-      throw malformedEvent()
+      return undefined
   }
 }
 
@@ -190,6 +194,7 @@ export async function* translate(events: AsyncIterable<unknown>): AsyncGenerator
   for await (const candidate of events) {
     // Do not move state, allocate indexes, or emit chunks until every field is valid.
     const event = validateWireEvent(candidate)
+    if (event === undefined) continue
 
     switch (event.type) {
       case 'text-delta':

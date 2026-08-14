@@ -48,6 +48,44 @@ test('translates every non-terminal event, assigning lazy monotonic blocks', asy
   ])
 })
 
+test('silently skips unknown provider extension events without changing output', async () => {
+  const chunks = await collect(translate(events(
+    { type: 'start' },
+    { type: 'start-step', step: 'reasoning' },
+    { type: 'text-start', index: 0 },
+    { type: 'text-end', index: 0 },
+    { type: 'finish-step', step: 'reasoning' },
+    { type: 'provider-metadata', provider: 'command-code' },
+    { type: 'text-delta', text: 'ok' },
+    { type: 'finish', finishReason: 'stop' },
+  )))
+
+  assert.deepEqual(chunks, [
+    { type: 'block-start', index: 0, blockType: 'text' },
+    { type: 'text-delta', index: 0, text: 'ok' },
+    { type: 'block-end', index: 0, block: { type: 'text', text: 'ok' } },
+    { type: 'finish', reason: { kind: 'stop' } },
+  ])
+})
+
+test('continues consuming known events when unknown types are interleaved', async () => {
+  const chunks = await collect(translate(events(
+    { type: 'text-delta', text: 'before ' },
+    { type: 'text-start', index: 0 },
+    { type: 'text-delta', text: 'after' },
+    { type: 'text-end', index: 0 },
+    { type: 'finish', finishReason: 'stop' },
+  )))
+
+  assert.deepEqual(chunks, [
+    { type: 'block-start', index: 0, blockType: 'text' },
+    { type: 'text-delta', index: 0, text: 'before ' },
+    { type: 'text-delta', index: 0, text: 'after' },
+    { type: 'block-end', index: 0, block: { type: 'text', text: 'before after' } },
+    { type: 'finish', reason: { kind: 'stop' } },
+  ])
+})
+
 test('normalizes tool arguments once, selecting input before args before arguments', async () => {
   const chunks = await collect(translate(events(
     { type: 'tool-call', toolCallId: 'input', toolName: 'one', input: '{"a":1}', args: { ignored: true }, arguments: { ignored: true } },
@@ -163,7 +201,6 @@ test('rejects all invalid event schema before allocating a block', async (t) => 
     1,
     'event',
     {},
-    { type: 'unknown' },
     { type: 'text-delta' },
     { type: 'text-delta', text: 1 },
     { type: 'reasoning-delta' },
