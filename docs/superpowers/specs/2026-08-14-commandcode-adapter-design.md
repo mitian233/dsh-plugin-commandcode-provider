@@ -78,8 +78,8 @@ Credential resolution is deterministic: first validate the configured credential
    - text, system prompts, assistant tool calls, tool results, and JSON Schema tools map to the Command Code message/tool fields;
    - `stop` is not supported by the verified v1 Command Code envelope, so `options.stop !== undefined` throws `LlmError(..., 'UNSUPPORTED')` before any network request;
    - image input fails before network dispatch.
-4. The adapter performs the POST with `Authorization`, the fixed `x-command-code-version`, `x-cli-environment`, `x-project-slug`, and `attributionHeaders()` headers, then starts the idle watchdog while reads are pending.
-5. `parseCommandCodeLines()` accepts JSON lines and `data: <JSON>` lines; it ignores blank lines, comments, `event:` framing, `[DONE]`, and non-JSON plain lines. Only an identified `data:` payload or an explicitly designated JSON event that cannot parse throws `MALFORMED_RESPONSE`.
+4. The adapter performs the POST with `Authorization`, `attributionHeaders()`, and the complete fixed Command Code compatibility header set: `x-command-code-version` from the pinned Command Code CLI-version constant, `x-cli-environment: production`, `x-project-slug` from the execution context, `x-taste-learning: true`, and `x-co-flag: false`. Tests assert each header and its value before starting the idle watchdog.
+5. `parseCommandCodeLines()` accepts JSON lines and `data: <JSON>` lines; it ignores blank lines, comments, `event:` framing, `[DONE]`, and any plain or `data:` line that cannot parse as JSON. Only successfully parsed values that violate the Command Code event schema are rejected by `translate()` with a stable protocol error.
 6. The parsed events are passed to `translate()`.
 7. A `finally` block cancels an unfinished upstream reader/body even after the consumer stops early.
 
@@ -121,7 +121,7 @@ Use the Node test runner and a local mock server. The server emits newline-delim
 
 | Test file | Primary assertions |
 | --- | --- |
-| `stream.spec.ts` | fragmented line decoding, blank lines, comments/`event:`/`data:` framing, ignored `not json` lines, `[DONE]`, malformed identified payloads, EOF handling |
+| `stream.spec.ts` | fragmented line decoding, blank lines, comments/`event:`/`data:` framing, ignored `not json` and `data: non-json` lines, `[DONE]`, schema-invalid parsed events, EOF handling |
 | `serialize.spec.ts` | complete envelope with `config` execution context and `params.model`, all request fields, 64k cap, effort omission, `stop` rejection without network dispatch, image rejection |
 | `translate.spec.ts` | lazy blocks, string and record tool input canonicalization, terminal ordering, usage mapping, finish mapping, in-stream error classification/redaction, no-finish EOF |
 | `models.spec.ts` | static capability-table snapshots plus known/unknown `resolveModel()` behavior and reasoning capabilities |
