@@ -72,8 +72,8 @@ Credential resolution is deterministic: first validate the configured credential
 1. DSH selects the `commandcode` adapter and calls `stream(options)`.
 2. The adapter resolves the configured credential reference immediately before dispatch, combines the caller signal with its timeout/watchdog signal, and serializes the request.
 3. `serializeRequest()` produces the v1 wire envelope:
-   - `config` carries the Command Code execution context: `workingDir`, an ISO-8601 `date`, CLI/environment metadata, and the remaining stable project-context fields required by the verified reference request;
-   - `params.model` carries the selected model. `params` also contains `messages`, `tools`, `system`, `stream: true`, `max_tokens` (capped at `min(request maxTokens/default, 64_000)`), configured temperature, and an optional supported `reasoning_effort`;
+   - `config` is always this exact execution-context object, with no omitted stable fields: `workingDir: string` from the adapter working directory; `date: string` as `new Date(now).toISOString().slice(0, 10)` in UTC `YYYY-MM-DD` form; `environment: string` formatted as `${process.platform}-${process.arch}, Node.js ${process.version}`; `structure: []`; `isGitRepo: false`; `currentBranch: ""`; `mainBranch: ""`; `gitStatus: ""`; and `recentCommits: []`;
+   - `params.model` carries the selected model. `params` also contains `messages`, `tools`, `system`, `stream: true`, `max_tokens` (capped at `min(request maxTokens/default, 64_000)`), and an optional supported `reasoning_effort`. `params.temperature` is the request `GenerateOptions.temperature` when it is defined; otherwise it is exactly `0.3`;
    - `memory`, `taste`, and `skills` are explicitly `null`; a generated UUID supplies `threadId`;
    - text, system prompts, assistant tool calls, tool results, and JSON Schema tools map to the Command Code message/tool fields;
    - `stop` is not supported by the verified v1 Command Code envelope, so `options.stop !== undefined` throws `LlmError(..., 'UNSUPPORTED')` before any network request;
@@ -94,8 +94,8 @@ Every accepted wire event is a non-null JSON object with a recognized string `ty
 | `reasoning-delta` | `text: string` | Emits a lazy reasoning block; an empty string emits no chunk. |
 | `reasoning-end` | — | Closes the logical reasoning boundary. |
 | `tool-result` | — | Accepted and ignored; it does not produce a DSH output chunk. |
-| `tool-call` | `toolCallId: string`, `toolName: string`, and one of `input`, `args`, or `arguments` | Argument source must be a record or a JSON string that parses to a record; it is normalized exactly once. |
-| `finish` | `finishReason: string` | `totalUsage`, when present, is an object with `inputTokens` and `outputTokens` finite non-negative numbers; optional `inputTokenDetails` contains finite non-negative `noCacheTokens`, `cacheReadTokens`, and `cacheWriteTokens`. |
+| `tool-call` | `toolCallId: string`, `toolName: string`, and at least one of `input`, `args`, or `arguments` | Argument source selection is strictly `input > args > arguments`, including when two or three fields are present. The selected value must be a record or a JSON string that parses to a record; it is normalized exactly once. |
+| `finish` | `finishReason: string` | `finish.totalUsage`, when present, is an object with `inputTokens` and `outputTokens` finite non-negative numbers. `finish.totalUsage.inputTokenDetails`, when present, contains finite non-negative `noCacheTokens`, `cacheReadTokens`, and `cacheWriteTokens`. |
 | `error` | at least one of `error` or `message` | Error payload may be a string or object; nested message/code/type/status values are extracted, redacted, then classified. |
 
 `MALFORMED_RESPONSE` is the stable schema-error code. It is thrown before any state mutation for an invalid event; no later chunks are emitted. `stream.spec.ts` covers each missing/wrong-type field, non-object JSON values, unknown event types, and a valid event after ignored non-JSON framing.
@@ -106,7 +106,7 @@ The translator owns all wire-event state. It allocates monotonically increasing 
 
 - Empty text or reasoning deltas do not open blocks.
 - Nonempty text/reasoning deltas open the corresponding block lazily and append to it.
-- A tool-call event opens a tool-call block and emits one complete `tool-call-delta`. Wire `input` is `unknown`: a record is serialized once with `JSON.stringify`; a string must parse to a JSON object and is reserialized once into canonical object JSON; every other shape is a stable malformed-response error. `argumentsDelta` is therefore always raw JSON for the argument object, never double-encoded JSON text.
+- A tool-call event opens a tool-call block and emits one complete `tool-call-delta`. The source is selected strictly as `input > args > arguments` before normalization. The selected wire value is `unknown`: a record is serialized once with `JSON.stringify`; a string must parse to a JSON object and is reserialized once into canonical object JSON; every other shape is a stable malformed-response error. `argumentsDelta` is therefore always raw JSON for the argument object, never double-encoded JSON text.
 - On Command Code finish, the translator defers terminal emission until it has closed every opened block.
 - Terminal order is always: all `block-end` chunks, then optional `usage`, then exactly one `finish`.
 - A successful finish with no content blocks becomes an `EMPTY_RESPONSE` error finish.
@@ -120,7 +120,7 @@ Finish reasons map as follows:
 | `tool-calls` | `{ kind: 'tool-calls' }` |
 | `length`, `max_tokens`, `max-tokens`, `max_output_tokens` | `{ kind: 'max-tokens' }` |
 | normal stop | `{ kind: 'stop' }` |
-| unknown reason | error finish with a stable provider code |
+| unknown nonempty reason | error finish whose provider code is `finishReason.replace(/[^A-Za-z0-9]+/g, '_').replace(/^_+|_+$/g, '').toUpperCase()`; if that result is empty, the code is `UNKNOWN_FINISH_REASON`. The original reason appears only in the redacted error message. |
 
 Usage preserves DSH's disjoint token convention: use `noCacheTokens` when supplied; otherwise compute uncached input as `max(0, inputTokens - cacheReadTokens - cacheWriteTokens)`.
 
@@ -138,13 +138,13 @@ Use the Node test runner and a local mock server. The server emits newline-delim
 
 | Test file | Primary assertions |
 | --- | --- |
-| `stream.spec.ts` | fragmented line decoding, blank lines, comments/`event:`/`data:` framing, ignored `not json` and `data: non-json` lines, `[DONE]`, every schema-invalid event shape, EOF handling |
-| `serialize.spec.ts` | complete envelope with `config` execution context and `params.model`, all request fields, complete fixed headers (`Content-Type`, compatibility, attribution, and slug), 64k cap, effort omission, `stop` rejection without network dispatch, image rejection |
-| `translate.spec.ts` | lazy blocks, string and record tool input canonicalization, terminal ordering, usage mapping, finish mapping, in-stream error classification/redaction, no-finish EOF |
-| `models.spec.ts` | static capability-table snapshots plus known/unknown `resolveModel()` behavior and reasoning capabilities |
-| `errors.spec.ts` | HTTP and in-stream redaction and context-overflow classification |
-| `adapter.spec.ts` | text/tool/usage integration, status mapping, exact headers/envelope, credential resolution precedence and validation, abort, watchdog, and upstream cancellation |
-| `index.spec.ts` | provider registration and disposer behavior where the DSH test harness supports it |
+| `stream.spec.ts` | Assert fragmented JSON and final unterminated JSON decode to the same events; blank, comment, `event:`, `[DONE]`, `not json`, and `data: non-json` lines emit no chunks; every invalid schema shape throws `MALFORMED_RESPONSE`; EOF without `finish` throws `STREAM_CLOSED`. |
+| `serialize.spec.ts` | Assert the complete envelope contains every exact `config` field/value, a UTC `YYYY-MM-DD` date, and the specified environment format; assert request temperature overrides `0.3` and absent temperature is `0.3`; assert model, all required params, null envelope fields, fixed/attribution headers, normalized slug, 64k cap, effort omission, pre-network `UNSUPPORTED` stop rejection, and pre-network image rejection. |
+| `translate.spec.ts` | Assert lazy block indexes, record/string canonical arguments, and that simultaneous argument fields select `input`, then `args`, then `arguments`; assert terminal `block-end`, usage, `finish` order; assert usage reads `finish.totalUsage.inputTokenDetails`; assert known reasons map as listed and unknown reasons yield the specified sanitized code with only redacted original reason in the message; assert classified/redacted in-stream errors and `STREAM_CLOSED` at no-finish EOF. |
+| `models.spec.ts` | Assert static capability snapshots, known `resolveModel()` identity/modalities/efforts/64,000 limit, and unknown-model text-only fallback with no reasoning efforts. |
+| `errors.spec.ts` | Assert HTTP and in-stream secrets are absent from messages and each representative authentication, rate-limit, context-window, and server failure maps to its specified error code. |
+| `adapter.spec.ts` | Assert text/tool/usage events produce the specified chunks, captured POST body and headers exactly match the serializer contract, credential-service/environment precedence and invalid values prevent fetch, caller abort and idle watchdog produce their terminal outcomes, and early consumer completion cancels the upstream reader. |
+| `index.spec.ts` | Assert `apply()` registers `commandcode` and settings once, retry-policy replacement disposes the prior registration, and plugin disposal removes every registration when the DSH test harness supports it. |
 
 The acceptance gate is `pnpm run typecheck`, `pnpm run build`, and `pnpm run test` passing in the workspace-resolved environment.
 
