@@ -55,6 +55,7 @@ test('streams text, tool calls, and usage over Command Code transport with compl
 test('maps provider status failures', async (t) => {
   for (const [status, body, code] of [
     [401, '{"message":"unauthorized"}', 'AUTH'],
+    [403, '{"message":"forbidden"}', 'AUTH'],
     [429, '{"message":"rate limit"}', 'RATE_LIMIT'],
     [400, '{"message":"context_length_exceeded"}', 'CONTEXT_WINDOW_EXCEEDED'],
     [500, '{"message":"gateway"}', 'SERVER'],
@@ -88,8 +89,14 @@ test('maps caller abort and idle watchdog, and cancels an open body after finish
   await finishServer.cancelled
 })
 
-test('model resolution is text-only and unknown models have no reasoning efforts', async () => {
+test('lists model metadata and resolves known and unknown models as text-only', async () => {
   const instance = adapter('http://localhost')
+  const models = await instance.listModels('commandcode')
+  assert.ok(models.length > 0)
+  assert.deepEqual(models.find(model => model.id === 'gpt-5.6-luna'), {
+    provider: 'commandcode', id: 'gpt-5.6-luna', name: 'gpt-5.6-luna', inputModalities: ['text'],
+  })
+
   const known = await instance.resolveModel('commandcode', 'gpt-5.6-luna')
   assert.deepEqual(known.inputModalities, ['text'])
   assert.equal(known.defaultMaxTokens, 64_000)

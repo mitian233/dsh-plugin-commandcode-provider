@@ -164,7 +164,12 @@ test('rejects all invalid event schema before allocating a block', async (t) => 
     { type: 'finish', finishReason: 'stop', totalUsage: [] },
     { type: 'finish', finishReason: 'stop', totalUsage: { inputTokens: -1, outputTokens: 0 } },
     { type: 'finish', finishReason: 'stop', totalUsage: { inputTokens: 1, outputTokens: Number.NaN } },
+    { type: 'finish', finishReason: 'stop', totalUsage: { inputTokens: 1, outputTokens: 0, inputTokenDetails: [] } },
+    { type: 'finish', finishReason: 'stop', totalUsage: { inputTokens: 1, outputTokens: 0, inputTokenDetails: { noCacheTokens: '1' } } },
+    { type: 'finish', finishReason: 'stop', totalUsage: { inputTokens: 1, outputTokens: 0, inputTokenDetails: { noCacheTokens: -1 } } },
     { type: 'finish', finishReason: 'stop', totalUsage: { inputTokens: 1, outputTokens: 0, inputTokenDetails: { cacheReadTokens: -1 } } },
+    { type: 'finish', finishReason: 'stop', totalUsage: { inputTokens: 1, outputTokens: 0, inputTokenDetails: { cacheWriteTokens: '1' } } },
+    { type: 'finish', finishReason: 'stop', totalUsage: { inputTokens: 1, outputTokens: 0, inputTokenDetails: { cacheWriteTokens: -1 } } },
     { type: 'error' },
     { type: 'error', error: 1 },
     { type: 'error', message: [] },
@@ -178,13 +183,36 @@ test('rejects all invalid event schema before allocating a block', async (t) => 
   }
 })
 
-test('classifies and redacts in-stream provider errors rather than converting them to STREAM_CLOSED', async () => {
+test('classifies and redacts in-stream provider errors rather than converting them to STREAM_CLOSED', async (t) => {
   const secret = 'sk-abcdefghijklmnopqrstuvwxyz123456'
   const error = await assertLlmError(translate(events({
     type: 'error',
     error: { status: 429, message: `rate limit: Bearer ${secret}` },
   })), 'RATE_LIMIT')
   assert.equal(error.message.includes(secret), false)
+
+  for (const [payload, code] of [
+    [{ error: { status: 401, message: 'unauthorized' } }, 'AUTH'],
+    [{ message: 'context_length_exceeded' }, 'CONTEXT_WINDOW_EXCEEDED'],
+    [{ error: { status: 503, message: 'gateway failure' } }, 'SERVER'],
+  ] as const) {
+    await t.test(code, async () => {
+      await assertLlmError(translate(events({ type: 'error', ...payload })), code)
+    })
+  }
+})
+
+test('rejects malformed data after emitted blocks and cannot emit subsequent chunks', async () => {
+  const iterator = translate(events(
+    { type: 'text-delta', text: 'before' },
+    { type: 'tool-call', toolCallId: 'bad', toolName: 'tool', input: [] },
+    { type: 'text-delta', text: 'after' },
+  ))[Symbol.asyncIterator]()
+
+  assert.deepEqual(await iterator.next(), { done: false, value: { type: 'block-start', index: 0, blockType: 'text' } })
+  assert.deepEqual(await iterator.next(), { done: false, value: { type: 'text-delta', index: 0, text: 'before' } })
+  await assert.rejects(iterator.next(), { code: 'MALFORMED_RESPONSE' })
+  assert.deepEqual(await iterator.next(), { done: true, value: undefined })
 })
 
 test('throws STREAM_CLOSED when the parsed event source ends without finish', async () => {
