@@ -84,29 +84,9 @@ dependency); run `pnpm approve-builds` when prompted.
 
 ### Reference implementation
 
-The browser-assisted key retrieval flow mirrors
+The browser-assisted OAuth flow is ported from
 [`pi-commandcode-provider`](https://github.com/patlux/pi-commandcode-provider),
-the Command Code provider for [pi](https://github.com/earendil-works/pi) (the
-terminal AI assistant). That project's OAuth login
-([`src/oauth.ts`](https://github.com/patlux/pi-commandcode-provider/blob/main/src/oauth.ts))
-and local callback server
-([`src/auth-server.ts`](https://github.com/patlux/pi-commandcode-provider/blob/main/src/auth-server.ts))
-are the upstream contract this plugin ports:
-
-- One-shot local HTTP server on `127.0.0.1:5959` (with a small fallback
-  range), accepting exactly one valid `POST /callback` and then closing.
-- Studio authorization URL
-  `https://commandcode.ai/studio/auth/cli?callback=<localhost>&state=<token>`
-  with a CSRF state token.
-- CORS allowed origins `commandcode.ai` / `staging.commandcode.ai` /
-  `localhost:3000`, plus Chrome Private Network Access preflight headers.
-- On callback: validate the state token, store the API key as credentials,
-  close the server.
-
-Differences in this DSH plugin: the flow is driven from the settings page
-(button click → host routes → polling) instead of pi's `/login` command, and
-the key is stored through DSH's credentials service (`COMMANDCODE_API_KEY`)
-instead of pi's `auth.json`. The manual paste fallback exists on both sides.
+the Command Code provider for [pi](https://github.com/earendil-works/pi).
 
 ## Development installation
 
