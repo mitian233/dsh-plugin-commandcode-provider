@@ -194,3 +194,11 @@ Credential refresh, dynamic model discovery or catalog
 caching, image inputs, and `stop` sequences are intentionally unsupported.
 Image and `stop` requests fail before network dispatch. This plugin does not
 change DSH host control flow or the agent loop.
+
+## License
+
+[MIT](LICENSE) © 2026 Mikan Harada.
+
+The browser-assisted OAuth flow is ported from the MIT-licensed
+[`pi-commandcode-provider`](https://github.com/patlux/pi-commandcode-provider)
+(© 2025 Pat Woz).
