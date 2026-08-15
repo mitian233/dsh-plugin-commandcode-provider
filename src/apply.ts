@@ -10,6 +10,9 @@ import type { CommandCodeCatalogModel, CommandCodeConnectionOptions } from './ad
 import { DEFAULT_MODELS_CACHE_TTL_MS, loadCommandCodeCatalog } from './catalog.ts'
 import type { LoadedCommandCodeCatalog } from './catalog.ts'
 import { Config, resolveAdapterOptions } from './config.ts'
+// Type-only: carries the `webServer` Context merge for the OAuth route registration below.
+import type {} from '@deepseek-ai/dsh-host-webserver'
+import { createCommandCodeOAuthCoordinator } from './oauth.ts'
 
 const NS = settingsNamespace('llm-commandcode')
 
@@ -68,6 +71,21 @@ export function createApply(dependencies: ApplyDependencies = {}): (ctx: Context
         'MISSING_CREDENTIAL',
       )
     }
+
+    const coordinator = createCommandCodeOAuthCoordinator(ctx)
+    // Web-only route registration: the webServer service may be absent in
+    // headless compositions, so the routes mount through a delayed injection
+    // instead of a hard `inject` (which would fail headless boots).
+    ctx.inject(['webServer'], (sctx) => {
+      sctx.effect(() => {
+        const disposeStart = sctx.webServer.register({ kind: 'exact', path: '/commandcode-oauth/start', handler: coordinator.routes.onStart })
+        const disposeStatus = sctx.webServer.register({ kind: 'exact', path: '/commandcode-oauth/status', handler: coordinator.routes.onStatus })
+        return () => {
+          disposeStart()
+          disposeStatus()
+        }
+      }, 'llm-commandcode.oauth-routes')
+    })
 
     const adapter = new CommandCodeAdapter({ options, resolveApiKey })
     ctx.llm.registerConfigurableProviders([
