@@ -8,7 +8,9 @@ sends requests to Command Code's `/alpha/generate` API.
 
 This plugin is a standalone DSH plugin. It does not modify the DeepSeek Harness
 repository: install it into a profile with `dsh plugin`, the official plugin
-manager.
+manager. The package declares a `dsh.bundle` manifest (a `cordis.patch.yml`
+layer), so `dsh plugin add` activates it automatically — no manual
+`cordis.patch.yml` edit is required.
 
 ### Run DSH
 
@@ -39,31 +41,41 @@ dsh plugin --profile web add .
 ```
 
 `add .` anchors the relative path to the invoking directory, so it links this
-checkout into the profile's pnpm-managed `node_modules`. Any other pnpm spec
-works the same way — an npm package, a packed tarball, or a git host:
+checkout into the profile's pnpm-managed `node_modules`. Because the package
+declares `dsh.bundle`, `dsh plugin` also appends the package to the profile's
+`dsh.profile.bundles`, so its patch layer activates on boot without any
+additional wiring. Any other pnpm spec works the same way — an npm package, a
+packed tarball, or a git host:
 
 ```sh
 dsh plugin --profile web add ./dsh-plugin-commandcode-provider-0.1.0.tgz
 dsh plugin --profile web add github:mitian233/dsh-plugin-commandcode-provider
 ```
 
-Remove the plugin with:
+Remove the plugin (also removes the bundle layer) with:
 
 ```sh
 dsh plugin --profile web remove dsh-plugin-commandcode-provider
 ```
 
-### Load the plugin row
+### Override config in the profile
 
-Reference the installed package by name in the profile's `cordis.patch.yml` (or
-an overlay) — see [Configuration](#configuration). Bare plugin `name`s resolve
-through the profile directory's Node parent-walk, so the installed package is
-found without extra wiring.
+The bundle's patch supplies schema defaults. To override any key, add an
+id-targeted patch row to your own profile `cordis.patch.yml` (applied after
+bundle layers):
+
+```yaml
+- id: llm-commandcode
+  config:
+    baseURL: https://api.commandcode.ai
+    maxTokens: 64000
+```
 
 ### Verify
 
 ```sh
-dsh --profile web --dump-config   # shows the llm-commandcode layer and row
+dsh --profile web --dump-config   # shows the "# == dsh-plugin-commandcode-provider" layer
+
 dsh web                           # boot the Web UI
 ```
 

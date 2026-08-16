@@ -1,0 +1,14 @@
+# Bundle patch layer for dsh-plugin-commandcode-provider.
+# Applied when a profile lists this package in dsh.profile.bundles.
+# The plugin row is referenced by package name so Node resolves the
+# installed code. Config keys mirror the schema defaults in src/config.ts;
+# users can override them in their own profile cordis.patch.yml.
+- insert:
+    - id: llm-commandcode
+      name: dsh-plugin-commandcode-provider
+      config:
+        apiKeyEnv: COMMANDCODE_API_KEY
+        baseURL: https://api.commandcode.ai
+        maxTokens: 64000
+        defaultContextWindow: 1000000
+        streamIdleTimeoutMs: 300000
