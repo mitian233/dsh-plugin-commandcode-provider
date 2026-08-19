@@ -190,7 +190,10 @@ and `/commandcode-oauth/status`; Studio POSTs to the local `/callback`.
 metadata, idle streaming behavior, and DSH-managed retries. `temperature` is
 accepted as a compatibility setting; each request's explicit temperature wins,
 and the wire default is `0.3`. Static `models` entries can supply display,
-context-window, and maximum-token overrides; this does not discover models.
+context-window, and maximum-token overrides. When no non-empty static list is
+configured, the plugin loads a validated model catalog from its private cache
+and refreshes stale or missing catalogs in the background. A failed refresh
+keeps the last usable cache or the built-in static capability list.
 
 ## Supported behavior
 
@@ -202,10 +205,12 @@ context-window, and maximum-token overrides; this does not discover models.
 
 ## v1 non-goals
 
-Credential refresh, dynamic model discovery or catalog
-caching, image inputs, and `stop` sequences are intentionally unsupported.
-Image and `stop` requests fail before network dispatch. This plugin does not
-change DSH host control flow or the agent loop.
+Credential refresh, image inputs, and `stop` sequences are intentionally
+unsupported. Model catalog refresh is supported, but it is limited to the
+public Command Code model directory and does not infer capabilities beyond the
+metadata returned by that directory. Image and `stop` requests fail before
+network dispatch. This plugin does not change DSH host control flow or the
+agent loop.
 
 ## License
 

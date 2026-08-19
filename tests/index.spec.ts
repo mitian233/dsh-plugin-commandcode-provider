@@ -14,6 +14,7 @@ import { createMockServer } from './mock-server.ts'
 import { apply } from '../src/index.ts'
 import { createApply } from '../src/apply.ts'
 import type { ApplyDependencies } from '../src/apply.ts'
+import type { CommandCodeOAuthCoordinator } from '../src/oauth.ts'
 
 type CatalogLoader = NonNullable<ApplyDependencies['loadCatalog']>
 
@@ -120,6 +121,29 @@ test('apply registers the configurable provider and adapter reversibly', async (
   await ctx.fiber.dispose()
   assert.deepEqual(llm.listProviders(), [])
   assert.deepEqual(llm.listConfigurableProviders(), [])
+})
+
+test('disposing the plugin coordinator closes OAuth resources', async () => {
+  let disposed = false
+  const coordinator: CommandCodeOAuthCoordinator = {
+    session: { state: 'idle' },
+    start: async () => 'https://commandcode.ai',
+    status: () => ({ state: 'idle' }),
+    dispose: () => { disposed = true },
+    routes: {
+      onStart: () => undefined,
+      onStatus: () => undefined,
+    },
+  }
+  const ctx = new Context()
+  await ctx.plugin(LlmRuntime)
+  createApply({
+    loadCatalog: staticCatalogLoader,
+    createOAuthCoordinator: () => coordinator,
+  })(ctx, { apiKeyEnv: 'COMMANDCODE_API_KEY' })
+
+  await ctx.fiber.dispose()
+  assert.equal(disposed, true)
 })
 
 test('catalog startup uses injected fresh, stale, and missing cache outcomes without public fetches', async (t) => {

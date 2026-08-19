@@ -13,6 +13,7 @@ import { Config, resolveAdapterOptions } from './config.ts'
 // Type-only: carries the `webServer` Context merge for the OAuth route registration below.
 import type {} from '@deepseek-ai/dsh-host-webserver'
 import { createCommandCodeOAuthCoordinator } from './oauth.ts'
+import type { CommandCodeOAuthCoordinator } from './oauth.ts'
 
 const NS = settingsNamespace('llm-commandcode')
 
@@ -23,6 +24,7 @@ const NS = settingsNamespace('llm-commandcode')
 export interface ApplyDependencies {
   fetchImpl?: typeof fetch
   loadCatalog?: (options: Parameters<typeof loadCommandCodeCatalog>[0]) => Promise<LoadedCommandCodeCatalog>
+  createOAuthCoordinator?: (ctx: Context) => CommandCodeOAuthCoordinator
 }
 
 /**
@@ -31,7 +33,7 @@ export interface ApplyDependencies {
  * so the production API remains `apply(ctx, config)`.
  */
 export function createApply(dependencies: ApplyDependencies = {}): (ctx: Context, config: Config) => void {
-  const { fetchImpl, loadCatalog } = dependencies
+  const { fetchImpl, loadCatalog, createOAuthCoordinator = createCommandCodeOAuthCoordinator } = dependencies
   return (ctx, config) => {
     let current: () => Config = () => config
     let lastRaw: Config | undefined
@@ -72,7 +74,8 @@ export function createApply(dependencies: ApplyDependencies = {}): (ctx: Context
       )
     }
 
-    const coordinator = createCommandCodeOAuthCoordinator(ctx)
+    const coordinator = createOAuthCoordinator(ctx)
+    ctx.effect(() => () => coordinator.dispose(), 'llm-commandcode.oauth-coordinator')
     // Web-only route registration: the webServer service may be absent in
     // headless compositions, so the routes mount through a delayed injection
     // instead of a hard `inject` (which would fail headless boots).
