@@ -9,6 +9,7 @@ import type {
   LlmModelInfo,
   LlmProviderInfo,
   LlmResolvedModelInfo,
+  PreparedAdapterCall,
   ResolvedRetryPolicy,
   StreamChunk,
 } from '@deepseek-ai/dsh-llm'
@@ -107,6 +108,25 @@ export class CommandCodeAdapter extends LlmAdapter {
 
   override resolveModel(provider: string, model: string, _signal?: AbortSignal): Promise<LlmResolvedModelInfo> {
     return Promise.resolve(modelResolution(provider, model, this.config.options()))
+  }
+
+  /**
+   * Bind exact model metadata and the eventual request dispatch to one adapter
+   * generation. Host dsh-llm ≥ 0.1.2-rc.1 routes every call through this seam
+   * (`LlmRuntime.adapterStream` awaits `adapter.prepareCall`), dispatching via
+   * the returned one-shot `stream`. Older hosts kept calling `adapter.stream`
+   * directly, so this override is forward-compatible: both paths land here.
+   */
+  override async prepareCall(
+    provider: string,
+    model: string,
+    signal?: AbortSignal,
+  ): Promise<PreparedAdapterCall> {
+    const resolved = await this.resolveModel(provider, model, signal)
+    return {
+      model: resolved,
+      stream: (options) => this.stream(options),
+    }
   }
 
   async * stream(options: GenerateOptions): AsyncGenerator<StreamChunk> {

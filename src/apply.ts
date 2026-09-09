@@ -3,7 +3,9 @@ import { assertUsableApiKey, LlmError } from '@deepseek-ai/dsh-llm'
 import { credentialRef } from '@deepseek-ai/dsh-credentials'
 import { launchEnvironmentOf } from '@deepseek-ai/dsh-launch-environment'
 import { dshHomePath } from '@deepseek-ai/dsh-home-paths'
-import { deepEqualJson, installSettingsSection, settingsNamespace } from '@deepseek-ai/dsh-settings'
+// Type-only: activates dsh-settings' `declare module '@deepseek-ai/cordis'`
+// augmentation that merges `ctx.settings` (SettingsProvider) into Context.
+import type {} from '@deepseek-ai/dsh-settings'
 
 import { CommandCodeAdapter, PROVIDER, staticCommandCodeCatalogModels } from './adapter.ts'
 import type { CommandCodeCatalogModel, CommandCodeConnectionOptions } from './adapter.ts'
@@ -15,7 +17,26 @@ import type {} from '@deepseek-ai/dsh-host-webserver'
 import { createCommandCodeOAuthCoordinator } from './oauth.ts'
 import type { CommandCodeOAuthCoordinator } from './oauth.ts'
 
-const NS = settingsNamespace('llm-commandcode')
+const NS = 'llm-commandcode' as const
+
+/**
+ * Structural equality over JSON-compatible values. dsh-settings ≥ 0.1.2-rc.1
+ * removed its exported `deepEqualJson`; the retry-policy snapshot it used to
+ * feed is plain JSON, so this local equivalent keeps the scope identical.
+ */
+function deepEqualJson(a: unknown, b: unknown): boolean {
+  if (a === b) return true
+  if (typeof a !== 'object' || typeof b !== 'object' || a === null || b === null) return false
+  if (Array.isArray(a) || Array.isArray(b)) {
+    if (!Array.isArray(a) || !Array.isArray(b) || a.length !== b.length) return false
+    return a.every((entry, index) => deepEqualJson(entry, b[index]))
+  }
+  const left = a as Record<string, unknown>
+  const right = b as Record<string, unknown>
+  const keys = Object.keys(left)
+  if (keys.length !== Object.keys(right).length) return false
+  return keys.every((key) => key in right && deepEqualJson(left[key], right[key]))
+}
 
 /**
  * Internal catalog dependencies for deterministic startup tests. This module is
@@ -134,9 +155,17 @@ export function createApply(dependencies: ApplyDependencies = {}): (ctx: Context
       registration.replace([PROVIDER])
       registeredPolicy = policy
     }
-    installSettingsSection(ctx, NS, Config, config, {
-      setSource: source => { current = source },
-      onChange: ensureRegistrationFacts,
+    // Bridge the plugin's configuration into the settings service. dsh-settings
+    // ≥ 0.1.2-rc.1 owns the section through `ctx.settings.installSection` (the
+    // old free-function `installSettingsSection` was removed). Attaching via the
+    // `settings` service keeps headless compositions working when no provider
+    // is mounted: the section simply stays dormant and `current` keeps the entry
+    // defaults until a provider attaches.
+    ctx.inject(['settings'], (settingsCtx) => {
+      settingsCtx.settings.installSection(ctx, NS, Config, config, {
+        setSource: source => { current = source },
+        onChange: ensureRegistrationFacts,
+      })
     })
   }
 }

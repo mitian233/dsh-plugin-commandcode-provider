@@ -6,7 +6,7 @@ import { CredentialProvider } from '@deepseek-ai/dsh-credentials'
 import type { CredentialInfo, CredentialRef, ResolvedCredential } from '@deepseek-ai/dsh-credentials'
 import { createLaunchEnvironmentSnapshot, DSH_LAUNCH_ENVIRONMENT_KEY } from '@deepseek-ai/dsh-launch-environment'
 import { LlmRuntime } from '@deepseek-ai/dsh-llm'
-import { SettingsProvider, settingsNamespace } from '@deepseek-ai/dsh-settings'
+import { SettingsProvider } from '@deepseek-ai/dsh-settings'
 import type { SettingsNamespace } from '@deepseek-ai/dsh-settings'
 
 import { collect } from './assemble.ts'
@@ -267,7 +267,7 @@ test('retry-policy settings changes replace the route and update its captured po
   await new Promise(resolve => setTimeout(resolve, 0))
   const updatesBeforeSettings = topologyUpdates
 
-  await ctx.settings.update(settingsNamespace('llm-commandcode'), {
+  await ctx.settings.update('llm-commandcode', {
     retryPolicy: { mode: 'always', backoff: { initialDelayMs: 25, maxDelayMs: 100, jitterRatio: 0.2 } },
   })
   await new Promise(resolve => setTimeout(resolve, 0))

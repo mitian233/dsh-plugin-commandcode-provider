@@ -14,8 +14,11 @@
 
 import { useCallback, useEffect, useState } from 'react'
 import type { CSSProperties, ReactNode } from 'react'
-import type { CredentialView } from '@deepseek-ai/dsh-api-remotes/client'
-import type { InjectFace, PropsLocale, PropsRuntime } from '@deepseek-ai/dsh-client-ui-slots'
+import type { CredentialInfo } from '@deepseek-ai/dsh-credentials'
+// Type-only: activates the `ctx.slots`/SlotMap augmentation together with
+// the settings range types (`SettingsSectionOwnerProps`, `PropsLocale`, …).
+import type { SettingsSectionOwnerProps } from '@deepseek-ai/dsh-client-ui-settings/client'
+import type { ComposedProps, PropsLocale } from '@deepseek-ai/dsh-client-ui-slots'
 import type { CommandCodeSettingsKey } from './locales.ts'
 
 /** Credential reference this section manages (matches the host default). */
@@ -25,11 +28,13 @@ export const COMMANDCODE_API_KEY_REF = 'COMMANDCODE_API_KEY'
 export interface CommandCodeSectionInjected {
   /** Credentials-domain wire face (describe/set/unset). */
   credentials: {
-    describe(payload: { refs: string[] }): Promise<{
-      result: { ok: boolean; value?: { credentials?: Record<string, CredentialView> }; error?: { message: string } }
+    describe(refs: readonly string[]): Promise<{
+      ok: boolean
+      value?: Record<string, CredentialInfo>
+      error?: { message: string }
     }>
-    set(payload: { ref: string; value: string }): Promise<{ result: { ok: boolean; error?: { message: string } } }>
-    unset(payload: { ref: string }): Promise<{ result: { ok: boolean; error?: { message: string } } }>
+    set(ref: string, value: string): Promise<{ ok: boolean; error?: { message: string } }>
+    unset(ref: string): Promise<{ ok: boolean; error?: { message: string } }>
   }
   /** Same-origin OAuth endpoints served by the plugin host half. */
   oauth: {
@@ -40,9 +45,8 @@ export interface CommandCodeSectionInjected {
 
 /** Full component props: shell (`close`), locale (`t`), injected face. */
 export type CommandCodeSectionProps =
-  PropsRuntime<'settings.section'>
-  & PropsLocale<'settings.commandcode'>
-  & InjectFace<CommandCodeSectionInjected>
+  ComposedProps<'settings.section', never, never, unknown, CommandCodeSectionInjected, never, 'settings.commandcode'>
+  & Pick<SettingsSectionOwnerProps, 'close'>
 
 /** A short inline status message rendered under the form. */
 function Notice({ tone, children }: { tone: 'ok' | 'error'; children: ReactNode }): ReactNode {
@@ -62,7 +66,7 @@ const row: CSSProperties = { display: 'flex', gap: 8, marginTop: 8 }
 
 export function CommandCodeSection(props: CommandCodeSectionProps): ReactNode {
   const { t, credentials, oauth } = props
-  const [keyState, setKeyState] = useState<CredentialView | undefined>(undefined)
+  const [keyState, setKeyState] = useState<CredentialInfo | undefined>(undefined)
   const [checked, setChecked] = useState(false)
   const [loadFailure, setLoadFailure] = useState<string | undefined>(undefined)
   const [keyDraft, setKeyDraft] = useState('')
@@ -74,12 +78,12 @@ export function CommandCodeSection(props: CommandCodeSectionProps): ReactNode {
   const refresh = useCallback(async (): Promise<void> => {
     setLoadFailure(undefined)
     try {
-      const response = await credentials.describe({ refs: [COMMANDCODE_API_KEY_REF] })
-      if (!response.result.ok) {
+      const response = await credentials.describe([COMMANDCODE_API_KEY_REF])
+      if (!response.ok) {
         setLoadFailure(t('loadError'))
         return
       }
-      setKeyState(response.result.value?.credentials?.[COMMANDCODE_API_KEY_REF])
+      setKeyState(response.value?.[COMMANDCODE_API_KEY_REF])
     } catch {
       setLoadFailure(t('loadError'))
     } finally {
@@ -103,9 +107,9 @@ export function CommandCodeSection(props: CommandCodeSectionProps): ReactNode {
     setBusy(true)
     setNotice(undefined)
     try {
-      const response = await credentials.set({ ref: COMMANDCODE_API_KEY_REF, value: keyValue })
-      if (!response.result.ok) {
-        setNotice({ tone: 'error', text: response.result.error?.message ?? t('saveError') })
+      const response = await credentials.set(COMMANDCODE_API_KEY_REF, keyValue)
+      if (!response.ok) {
+        setNotice({ tone: 'error', text: response.error?.message ?? t('saveError') })
         return
       }
       setKeyDraft('')
@@ -122,9 +126,9 @@ export function CommandCodeSection(props: CommandCodeSectionProps): ReactNode {
     setBusy(true)
     setNotice(undefined)
     try {
-      const response = await credentials.unset({ ref: COMMANDCODE_API_KEY_REF })
-      if (!response.result.ok) {
-        setNotice({ tone: 'error', text: response.result.error?.message ?? t('clearError') })
+      const response = await credentials.unset(COMMANDCODE_API_KEY_REF)
+      if (!response.ok) {
+        setNotice({ tone: 'error', text: response.error?.message ?? t('clearError') })
         return
       }
       setConfirmingClear(false)

@@ -1,6 +1,6 @@
 /** Strict Command Code wire-event validation and StreamChunk translation. */
 
-import { CallId, EMPTY_RESPONSE_CODE, LlmError } from '@deepseek-ai/dsh-llm'
+import { EMPTY_RESPONSE_CODE, LlmError, ToolCallId } from '@deepseek-ai/dsh-llm'
 import type { ContentBlock, FinishReason, StreamChunk, TokenUsage } from '@deepseek-ai/dsh-llm'
 
 import { commandCodeError, redactCommandCodeErrorText, unknownFinishReasonCode } from './errors.ts'
@@ -167,7 +167,7 @@ function closedBlock(block: OpenBlock): ContentBlock {
     case 'reasoning': return { type: 'reasoning', text: block.text }
     case 'tool-call': return {
       type: 'tool-call',
-      id: CallId(block.id ?? ''),
+      id: ToolCallId(block.id ?? ''),
       name: block.name ?? '',
       arguments: block.text,
     }
@@ -231,7 +231,7 @@ export async function* translate(events: AsyncIterable<unknown>): AsyncGenerator
         yield {
           type: 'tool-call-delta',
           index: block.index,
-          id: CallId(event.toolCallId),
+          id: ToolCallId(event.toolCallId),
           name: event.toolName,
           argumentsDelta: event.argumentsJson,
         }
